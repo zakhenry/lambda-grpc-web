@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package integration.v1;
+
+service Test {
+
+  rpc Unary (UnaryRequest) returns (UnaryResponse);
+  rpc ServerStream (ServerStreamRequest) returns (stream ServerStreamResponse);
+  // note grpc web does not support any client streaming types
+}
+
+message UnaryRequest {
+  enum UnaryTestCase {
+    UNKNOWN = 0;
+    OK = 1; // success response
+    PANIC = 2; // uncaught panic
+  }
+
+  UnaryTestCase test_case = 1;
+}
+
+message UnaryResponse {
+
+}
+
+
+message ServerStreamRequest {
+  enum StreamTestCase {
+    UNKNOWN = 0;
+    EMPTY = 1; // success, but no content
+    OK = 2; // success response
+    PANIC_AFTER_PARTIAL_RESPONSE = 3; // response, and then panic
+    IMMEDIATE_ERROR = 4; // no response, error occurs immediately.
+    ERROR_AFTER_PARTIAL_RESPONSE = 5; // response, then terminate with error
+    NEVER_RESPOND = 6;
+  }
+
+  StreamTestCase test_case = 1;
+}
+
+message ServerStreamResponse {
+
+}
+

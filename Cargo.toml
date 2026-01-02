@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    ".",
+    "examples/hello-world", "integration",
+]
+
+[package]
+name = "lambda-grpc-web"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "lambda_grpc_web"
+path = "src/lib.rs"
+
+[dependencies]
+lambda_http = { version = "1.0.1", features = ["apigw_http"] }
+lambda_runtime = "1.0.1"
+tonic = "0.14.2"
+tonic-web = "0.14.2"
+tower-http = { version = "0.6.8", features = ["catch-panic"] }
+tower = "0.5.2"
+tokio = "1.48.0"
+
+[dev-dependencies]
+
+
+[build-dependencies]
+tonic-prost-build = "0.14.2"
