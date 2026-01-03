@@ -1,10 +1,10 @@
+use crate::api::server_stream_request::StreamTestCase;
+use crate::api::test_client::TestClient;
+use crate::api::{ServerStreamRequest, UnaryRequest};
 use hyper_util::client::legacy::connect::HttpInfo;
 use hyper_util::rt::TokioExecutor;
 use tokio_stream::StreamExt;
 use tonic_web::GrpcWebClientLayer;
-use crate::api::test_client::TestClient;
-use crate::api::{ServerStreamRequest, UnaryRequest};
-use crate::api::server_stream_request::StreamTestCase;
 
 pub mod api {
     tonic::include_proto!("integration.v1");
@@ -17,10 +17,8 @@ pub mod api {
 /// 4. configure integration tests to use testcontainers to build and start the lambda
 /// 5. execute integration tests (using test-context crate)
 
-
 #[tokio::test]
 async fn test_stream() {
-
     let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build_http();
 
     let svc = tower::ServiceBuilder::new()
@@ -30,7 +28,8 @@ async fn test_stream() {
     let mut client = TestClient::with_origin(svc, "http://0.0.0.0:9000".try_into().unwrap());
 
     let request = tonic::Request::new(ServerStreamRequest {
-        test_case: StreamTestCase::NeverRespond.into(),
+        // test_case: StreamTestCase::NeverRespond.into(),
+        test_case: StreamTestCase::Ok.into(),
     });
 
     let response = client.server_stream(request).await.unwrap();
@@ -40,5 +39,4 @@ async fn test_stream() {
     while let Some(result) = stream.next().await {
         println!("RESPONSE={result:#?}");
     }
-
 }

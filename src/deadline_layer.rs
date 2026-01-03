@@ -1,4 +1,5 @@
 use lambda_http::http::{Request, Response};
+use lambda_http::tracing::log::{error, info, warn};
 use lambda_runtime::Context as LambdaContext;
 use std::{
     future::Future,
@@ -6,13 +7,13 @@ use std::{
     task::{Context, Poll},
     time::{Duration, SystemTime},
 };
-use tokio::time::{sleep_until, Instant};
-use tonic::service::AxumBody;
+use tokio::time::{Instant, sleep_until};
 use tonic::Status;
+use tonic::service::AxumBody;
 use tower::{Layer, Service};
 
 #[derive(Clone, Default)]
-pub struct LambdaDeadlineLayer {
+pub(crate) struct LambdaDeadlineLayer {
     /// Safety margin before the Lambda hard-deadline
     margin: Duration,
 }
@@ -35,7 +36,7 @@ impl<S> Layer<S> for LambdaDeadlineLayer {
 }
 
 #[derive(Clone)]
-pub struct LambdaDeadlineService<S> {
+pub(crate) struct LambdaDeadlineService<S> {
     inner: S,
     margin: Duration,
 }
@@ -55,12 +56,9 @@ where
     }
 
     fn call(&mut self, req: Request<AxumBody>) -> Self::Future {
-        let ctx = req
-            .extensions()
-            .get::<LambdaContext>()
-            .expect("LambdaContext missing from request extensions"); // @todo make error log, not panic
+        let ctx = req.extensions().get::<LambdaContext>();
 
-        let deadline: SystemTime = ctx.deadline();
+        let deadline: Option<SystemTime> = ctx.map(|c| c.deadline());
 
         let fut = self.inner.call(req);
         let margin = self.margin;
@@ -68,18 +66,21 @@ where
         Box::pin(async move {
             let now = SystemTime::now();
 
-            let deadline = match deadline.checked_sub(margin) {
-                Some(d) => d,
-                None => {
-                    return Ok(Status::deadline_exceeded("Lambda deadline exceeded").into_http());
-                }
+            let Some(deadline) = deadline else {
+                warn!(
+                    "lambda Context missing from request extension. Deadline cannot be determined, continuing..."
+                );
+                return fut.await;
             };
 
-            let remaining = match deadline.duration_since(now) {
-                Ok(d) => d,
-                Err(_) => {
-                    return Ok(Status::deadline_exceeded("Lambda deadline exceeded").into_http());
-                }
+            let Some(deadline) = deadline.checked_sub(margin) else {
+                error!("Unexpected time offset failure. Continuing request...");
+                return fut.await;
+            };
+
+            let Ok(remaining) = deadline.duration_since(now) else {
+                error!("Clock may have gone backwards. Continuing request...");
+                return fut.await;
             };
 
             let sleep = sleep_until(Instant::now() + remaining);
@@ -87,6 +88,7 @@ where
             tokio::select! {
                 res = fut => res,
                 _ = sleep => {
+                    info!("Lambda request deadline imminent, terminating request with `deadline_exceeded`");
                     Ok(Status::deadline_exceeded("Lambda deadline exceeded").into_http())
                 }
             }

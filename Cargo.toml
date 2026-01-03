@@ -13,6 +13,11 @@ edition = "2024"
 name = "lambda_grpc_web"
 path = "src/lib.rs"
 
+[features]
+default = ["catch-panic", "deadline"]
+catch-panic = []
+deadline = []
+
 [dependencies]
 lambda_http = { version = "1.0.1", features = ["apigw_http"] }
 lambda_runtime = "1.0.1"
@@ -21,6 +26,8 @@ tonic-web = "0.14.2"
 tower-http = { version = "0.6.8", features = ["catch-panic"] }
 tower = "0.5.2"
 tokio = "1.48.0"
+http = "1.4.0"
+axum = "0.8.8"
 
 [dev-dependencies]
 

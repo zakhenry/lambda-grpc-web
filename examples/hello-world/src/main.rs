@@ -1,13 +1,14 @@
 use hello_world::greeter_server::{Greeter, GreeterServer};
 use hello_world::{HelloReply, HelloRequest};
-use lambda_grpc_web::lambda_runtime::tracing::log::info;
 use lambda_grpc_web::lambda_runtime::Error;
+use lambda_grpc_web::lambda_runtime::tracing::log::info;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::service::Routes;
 use tonic::{Request, Response, Status};
+use lambda_grpc_web::LambdaServer;
 
 pub mod hello_world {
     tonic::include_proto!("helloworld");
@@ -71,9 +72,7 @@ impl Greeter for MyGreeter {
 async fn main() -> Result<(), Error> {
     let greeter = MyGreeter::default();
 
-    let routes = Routes::default().add_service(GreeterServer::new(greeter));
-
-    lambda_grpc_web::run(routes).await?;
+    LambdaServer::builder().add_service(GreeterServer::new(greeter)).serve().await?;
 
     Ok(())
 }
@@ -85,8 +84,8 @@ mod tests {
     use super::*;
     use crate::hello_world::greeter_client::GreeterClient;
     use hyper_rustls::HttpsConnector;
-    use hyper_util::client::legacy::connect::HttpConnector;
     use hyper_util::client::legacy::Client;
+    use hyper_util::client::legacy::connect::HttpConnector;
     use hyper_util::rt::TokioExecutor;
     use lambda_grpc_web::lambda_runtime::tower;
     use tonic::body::Body;
@@ -141,13 +140,16 @@ mod tests {
 
         let response = make_greeter_client()?.stream_hello(request).await?;
 
-        println!("HEADERS={headers:?}", headers=response.metadata());
+        println!("HEADERS={headers:?}", headers = response.metadata());
         let mut stream = response.into_inner();
 
-        let result: Vec<String> = stream.map(|response| {
-            println!("RESPONSE={response:?}");
-            response.unwrap().message
-        }).collect().await;
+        let result: Vec<String> = stream
+            .map(|response| {
+                println!("RESPONSE={response:?}");
+                response.unwrap().message
+            })
+            .collect()
+            .await;
 
         // stream.trailers().await?;
 

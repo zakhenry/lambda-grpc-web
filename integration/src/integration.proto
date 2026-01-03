@@ -14,6 +14,7 @@ message UnaryRequest {
     UNKNOWN = 0;
     OK = 1; // success response
     PANIC = 2; // uncaught panic
+    LAMBDA_CONTEXT_IN_HEADERS = 3; // inserts aws lambda context into headers
   }
 
   UnaryTestCase test_case = 1;
