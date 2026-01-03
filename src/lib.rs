@@ -1,5 +1,4 @@
 mod deadline_layer;
-mod grpc_lambda_layer;
 mod lambda_server_builder;
 
 pub use lambda_runtime;

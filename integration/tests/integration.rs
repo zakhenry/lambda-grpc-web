@@ -29,7 +29,9 @@ async fn test_stream() {
 
     let request = tonic::Request::new(ServerStreamRequest {
         // test_case: StreamTestCase::NeverRespond.into(),
-        test_case: StreamTestCase::Ok.into(),
+        // test_case: StreamTestCase::PanicAfterPartialResponse.into(),
+        test_case: StreamTestCase::ImmediateError.into(),
+        // test_case: StreamTestCase::Ok.into(),
     });
 
     let response = client.server_stream(request).await.unwrap();

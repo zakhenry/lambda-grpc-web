@@ -1,5 +1,4 @@
 use crate::deadline_layer::LambdaDeadlineLayer;
-use crate::grpc_lambda_layer::GrpcLambdaService;
 use http::Request;
 use lambda_runtime::Error;
 use std::any::Any;
@@ -83,12 +82,17 @@ impl<L> LambdaRouter<L> {
         + 'static,
         <L::Service as Service<Request<Body>>>::Future: Send + 'static,
     {
-        let mut svc = self
+        let svc = self
             .service_builder
             .service(self.routes);
 
+        #[cfg(feature = "deadline")]
+        let svc = ServiceBuilder::new()
+            .layer(LambdaDeadlineLayer::new(Duration::from_millis(500)))
+            .service(svc);
+
         #[cfg(feature = "catch-panic")]
-        let mut svc = ServiceBuilder::new()
+        let svc = ServiceBuilder::new()
             .layer(CatchPanicLayer::custom(|err: Box<dyn Any + Send + 'static>| {
                 let details = if let Some(s) = err.downcast_ref::<String>() {
                     s.clone()
@@ -103,24 +107,23 @@ impl<L> LambdaRouter<L> {
             }))
             .service(svc);
 
-        let mut svc = ServiceBuilder::new()
+        let svc = ServiceBuilder::new()
             .layer(GrpcWebLayer::new())
             .service(svc);
 
-        let svc = tower::ServiceExt::map_request(svc, |req: Request<tonic::service::AxumBody>| {
-            req.map(Body::new)
+        let handler = tower::service_fn(move |req: lambda_http::Request| {
+            let mut svc = svc.clone();
+            async move {
+                let req = req.map(tonic::service::AxumBody::new).map(Body::new);
+
+                let res = svc.call(req).await.expect("infallible");
+
+                let (parts, body) = res.into_parts();
+                let body = lambda_runtime::streaming::Body::new(tonic::service::AxumBody::new(body));
+                Ok::<_, Error>(http::Response::from_parts(parts, body))
+            }
         });
 
-        let svc = tower::ServiceExt::map_response(svc, |res: http::Response<Body>| {
-            res.map(tonic::service::AxumBody::new)
-        });
-
-        #[cfg(feature = "deadline")]
-        let svc = ServiceBuilder::new()
-            .layer(LambdaDeadlineLayer::new(Duration::from_millis(500)))
-            .service(svc);
-
-        let handler = GrpcLambdaService::new(svc);
         lambda_http::run_with_streaming_response(handler).await
     }
 }
