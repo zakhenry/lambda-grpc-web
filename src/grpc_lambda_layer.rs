@@ -1,38 +1,34 @@
-use lambda_http::{Service};
-use lambda_http::Request as LambdaRequest;
-use lambda_runtime::streaming::Body;
-use lambda_runtime::Error;
-use std::convert::Infallible;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use http::{Request, Response};
-use tonic::body::Body as TonicBody;
-use tower::util::BoxService;
-use tower::{Layer, MakeService, ServiceExt};
+use lambda_http::{Request as LambdaRequest};
+use lambda_runtime::streaming::Body as LambdaBody;
+use lambda_runtime::Error;
+use std::{
+    convert::Infallible,
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
+use tonic::service::AxumBody;
+use tower::Service;
 
-/// Adapts a Tower/Axum/Tonic service to the Lambda streaming HTTP runtime.
-pub struct GrpcLambdaService {
-    inner: BoxService<
-        Request<TonicBody>,
-        Response<TonicBody>,
-        Infallible,
-    >,
+pub struct GrpcLambdaService<S> {
+    inner: S,
 }
 
-impl GrpcLambdaService {
-    pub fn new(
-        inner: BoxService<
-            Request<TonicBody>,
-            Response<TonicBody>,
-            Infallible,
-        >,
-    ) -> Self {
+impl<S> GrpcLambdaService<S> {
+    pub fn new(inner: S) -> Self {
         Self { inner }
     }
 }
 
-impl Service<LambdaRequest> for GrpcLambdaService {
-    type Response = Response<Body>;
+impl<S> Service<LambdaRequest> for GrpcLambdaService<S>
+where
+    S: Service<Request<AxumBody>, Response = Response<AxumBody>, Error = Infallible>
+    + Send
+    + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = Response<LambdaBody>;
     type Error = Error;
 
     type Future =
@@ -46,18 +42,14 @@ impl Service<LambdaRequest> for GrpcLambdaService {
     }
 
     fn call(&mut self, req: LambdaRequest) -> Self::Future {
-        // Convert Lambda request body → AxumBody
-        let req = req.map(TonicBody::new);
-
+        let req = req.map(AxumBody::new);
         let fut = self.inner.call(req);
 
         Box::pin(async move {
-            let res = fut.await.expect("Infallible");
+            let res = fut.await.expect("infallible");
 
             let (parts, body) = res.into_parts();
-
-            // Convert AxumBody → Lambda streaming body
-            Ok(Response::from_parts(parts, Body::new(body)))
+            Ok(Response::from_parts(parts, LambdaBody::new(body)))
         })
     }
 }

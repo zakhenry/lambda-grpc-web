@@ -14,7 +14,6 @@ use tower::{Layer, Service};
 
 #[derive(Clone, Default)]
 pub(crate) struct LambdaDeadlineLayer {
-    /// Safety margin before the Lambda hard-deadline
     margin: Duration,
 }
 
@@ -95,3 +94,4 @@ where
         })
     }
 }
+

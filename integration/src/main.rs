@@ -13,6 +13,7 @@ use tonic::service::{LayerExt, Routes};
 use tonic::{Request, Response, Status};
 use tonic::transport::Server;
 use tower::{Layer, MakeService, ServiceBuilder};
+use lambda_grpc_web::LambdaServer;
 
 pub mod api {
     tonic::include_proto!("integration.v1");
@@ -94,11 +95,11 @@ impl Test for IntegrationTestService {
 async fn main() -> Result<(), Error> {
     let greeter = IntegrationTestService::default();
 
-    let svc = ServiceBuilder::new()
-        .layer(LogServiceNameLayer::default())
-        .service(TestServer::new(greeter));
 
-    lambda_grpc_web::run(svc).await?;
+    LambdaServer::builder()
+        .layer(LogServiceNameLayer::default())
+        .add_service(TestServer::new(greeter))
+        .serve().await?;
 
     Ok(())
 }
