@@ -1,22 +1,23 @@
 mod log_layer;
 
+use std::sync::Arc;
 use crate::api::server_stream_request::StreamTestCase;
 use crate::api::test_server::{Test, TestServer};
 use crate::api::unary_request::UnaryTestCase;
-use crate::api::{ServerStreamRequest, ServerStreamResponse, UnaryRequest, UnaryResponse};
+use crate::api::{HealthCheckRequest, HealthCheckResponse, ServerStreamRequest, ServerStreamResponse, UnaryRequest, UnaryResponse};
 use crate::log_layer::LogServiceNameLayer;
+use lambda_grpc_web::LambdaServer;
 use lambda_grpc_web::lambda_runtime::{Context, Error};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::{pending, StreamExt};
-use tonic::service::{LayerExt, Routes};
+use tokio_stream::{StreamExt, pending};
 use tonic::{Request, Response, Status};
-use tonic::transport::Server;
-use tower::{Layer, MakeService, ServiceBuilder};
-use lambda_grpc_web::LambdaServer;
+use crate::api::health_check_response::ServingStatus;
+use crate::api::health_server::{Health, HealthServer};
 
 pub mod api {
     tonic::include_proto!("integration.v1");
+    tonic::include_proto!("grpc.health.v1");
 }
 
 #[derive(Debug, Default)]
@@ -90,16 +91,33 @@ impl Test for IntegrationTestService {
     }
 }
 
+#[tonic::async_trait]
+impl Health for IntegrationTestService {
+    async fn check(&self, _request: Request<HealthCheckRequest>) -> Result<Response<HealthCheckResponse>, Status> {
+        Ok(Response::new(HealthCheckResponse {
+            status: ServingStatus::Serving.into(),
+        }))
+    }
+
+    type WatchStream = ReceiverStream<Result<HealthCheckResponse, Status>>;
+    async fn watch(&self, _request: Request<HealthCheckRequest>) -> Result<Response<Self::WatchStream>, Status> {
+        todo!()
+    }
+}
+
 // run with `cargo lambda watch -p integration`
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let greeter = IntegrationTestService::default();
 
+    let greeter_ref = Arc::new(greeter);
 
     LambdaServer::builder()
         .layer(LogServiceNameLayer::default())
-        .add_service(TestServer::new(greeter))
-        .serve().await?;
+        .add_service(TestServer::from_arc(greeter_ref.clone()))
+        .add_service(HealthServer::from_arc(greeter_ref))
+        .serve()
+        .await?;
 
     Ok(())
 }

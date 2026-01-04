@@ -9,7 +9,6 @@ use std::{
 };
 use tokio::time::{Instant, sleep_until};
 use tonic::Status;
-use tonic::body::Body;
 use tower::{Layer, Service};
 
 #[derive(Clone, Default)]
@@ -40,13 +39,15 @@ pub(crate) struct LambdaDeadlineService<S> {
     margin: Duration,
 }
 
-impl<S> Service<Request<Body>> for LambdaDeadlineService<S>
+impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for LambdaDeadlineService<S>
 where
-    S: Service<Request<Body>, Response = Response<Body>> + Send + 'static,
+    S: Service<Request<ReqBody>, Response = Response<ResBody>> + Send + 'static,
     S::Future: Send + 'static,
     S::Error: Send + 'static,
+    ReqBody: Send + 'static,
+    ResBody: Default + Send + 'static,
 {
-    type Response = Response<Body>;
+    type Response = Response<ResBody>;
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -54,7 +55,7 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
+    fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
         let ctx = req.extensions().get::<LambdaContext>();
 
         let deadline: Option<SystemTime> = ctx.map(|c| c.deadline());

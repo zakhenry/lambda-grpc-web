@@ -1,13 +1,15 @@
+use crate::api::health_client::HealthClient;
 use crate::api::server_stream_request::StreamTestCase;
 use crate::api::test_client::TestClient;
-use crate::api::{ServerStreamRequest, UnaryRequest};
-use hyper_util::client::legacy::connect::HttpInfo;
+use crate::api::{HealthCheckRequest, ServerStreamRequest};
+use http::Uri;
 use hyper_util::rt::TokioExecutor;
 use tokio_stream::StreamExt;
 use tonic_web::GrpcWebClientLayer;
 
 pub mod api {
     tonic::include_proto!("integration.v1");
+    tonic::include_proto!("grpc.health.v1");
 }
 
 /// Integration testing plan
@@ -25,7 +27,12 @@ async fn test_stream() {
         .layer(GrpcWebClientLayer::new())
         .service(client);
 
-    let mut client = TestClient::with_origin(svc, "http://0.0.0.0:9000".try_into().unwrap());
+    let origin: Uri = "http://0.0.0.0:9000".try_into().unwrap();
+
+    let mut client = TestClient::with_origin(svc.clone(), origin.clone());
+    let mut health_client = HealthClient::with_origin(svc, origin.clone());
+
+    health_client.check(HealthCheckRequest { service: Default::default() }).await.expect("check");
 
     let request = tonic::Request::new(ServerStreamRequest {
         // test_case: StreamTestCase::NeverRespond.into(),

@@ -33,20 +33,13 @@ where
     type Error = std::convert::Infallible;
     type Future = S::Future;
 
-    fn poll_ready(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 
     fn call(&mut self, req: Request<B>) -> Self::Future {
-
         if let Some((service, method)) = grpc_service_method(&req) {
-            println!(
-                "gRPC request: service={}, method={}",
-                service, method
-            );
+            println!("gRPC request: service={}, method={}", service, method);
         } else {
             panic!("Missing service method")
         }

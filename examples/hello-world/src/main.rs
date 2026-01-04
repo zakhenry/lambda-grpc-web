@@ -1,5 +1,6 @@
 use hello_world::greeter_server::{Greeter, GreeterServer};
 use hello_world::{HelloReply, HelloRequest};
+use lambda_grpc_web::LambdaServer;
 use lambda_grpc_web::lambda_runtime::Error;
 use lambda_grpc_web::lambda_runtime::tracing::log::info;
 use std::time::Duration;
@@ -8,7 +9,6 @@ use tokio::time::sleep;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::service::Routes;
 use tonic::{Request, Response, Status};
-use lambda_grpc_web::LambdaServer;
 
 pub mod hello_world {
     tonic::include_proto!("helloworld");
@@ -72,7 +72,10 @@ impl Greeter for MyGreeter {
 async fn main() -> Result<(), Error> {
     let greeter = MyGreeter::default();
 
-    LambdaServer::builder().add_service(GreeterServer::new(greeter)).serve().await?;
+    LambdaServer::builder()
+        .add_service(GreeterServer::new(greeter))
+        .serve()
+        .await?;
 
     Ok(())
 }
