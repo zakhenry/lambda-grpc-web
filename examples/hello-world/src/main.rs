@@ -1,13 +1,7 @@
 use hello_world::greeter_server::{Greeter, GreeterServer};
 use hello_world::{HelloReply, HelloRequest};
-use lambda_grpc_web::LambdaServer;
 use lambda_grpc_web::lambda_runtime::Error;
-use lambda_grpc_web::lambda_runtime::tracing::log::info;
-use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::time::sleep;
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
-use tonic::service::Routes;
+use lambda_grpc_web::LambdaServer;
 use tonic::{Request, Response, Status};
 
 pub mod hello_world {
@@ -32,38 +26,6 @@ impl Greeter for MyGreeter {
         Ok(Response::new(reply))
     }
 
-    type StreamHelloStream = ReceiverStream<Result<HelloReply, Status>>;
-
-    async fn stream_hello(
-        &self,
-        request: Request<HelloRequest>,
-    ) -> Result<Response<Self::StreamHelloStream>, Status> {
-        let (tx, rx) = mpsc::channel::<Result<HelloReply, Status>>(1);
-
-        let responses: Vec<String> = request
-            .into_inner()
-            .name
-            .chars()
-            .into_iter()
-            .scan(String::new(), |acc, c| {
-                acc.push(c);
-                Some(acc.clone())
-            })
-            .collect();
-
-        tokio::spawn(async move {
-            for response in responses {
-                if tx.send(Ok(HelloReply { message: response })).await.is_err() {
-                    info!("client dropped connection");
-                    return;
-                }
-
-                sleep(Duration::from_millis(20)).await;
-            }
-        });
-
-        Ok(Response::new(ReceiverStream::new(rx)))
-    }
 }
 
 // run with `cargo lambda watch -p example-hello-world`
@@ -87,12 +49,11 @@ mod tests {
     use super::*;
     use crate::hello_world::greeter_client::GreeterClient;
     use hyper_rustls::HttpsConnector;
-    use hyper_util::client::legacy::Client;
     use hyper_util::client::legacy::connect::HttpConnector;
+    use hyper_util::client::legacy::Client;
     use hyper_util::rt::TokioExecutor;
     use lambda_grpc_web::lambda_runtime::tower;
     use tonic::body::Body;
-    use tonic::codegen::tokio_stream::StreamExt;
     use tonic_web::{GrpcWebCall, GrpcWebClientLayer, GrpcWebClientService};
 
     fn make_greeter_client() -> Result<
@@ -135,39 +96,4 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn stream_test() -> Result<(), Box<dyn std::error::Error>> {
-        let request = Request::new(HelloRequest {
-            name: "foobar".into(),
-        });
-
-        let response = make_greeter_client()?.stream_hello(request).await?;
-
-        println!("HEADERS={headers:?}", headers = response.metadata());
-        let mut stream = response.into_inner();
-
-        let result: Vec<String> = stream
-            .map(|response| {
-                println!("RESPONSE={response:?}");
-                response.unwrap().message
-            })
-            .collect()
-            .await;
-
-        // stream.trailers().await?;
-
-        assert_eq!(
-            result,
-            vec![
-                "f".to_string(),
-                "fo".to_string(),
-                "foo".to_string(),
-                "foob".to_string(),
-                "fooba".to_string(),
-                "foobar".to_string(),
-            ]
-        );
-
-        Ok(())
-    }
 }

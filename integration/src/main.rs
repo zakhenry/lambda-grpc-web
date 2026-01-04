@@ -126,6 +126,7 @@ impl Health for HealthTestService {
 }
 
 // run with `cargo lambda watch -p integration`
+// build for aws with `cargo lambda build -p integration --release --output-format zip --arm64`
 #[tokio::main]
 async fn main() -> Result<(), Error> {
 

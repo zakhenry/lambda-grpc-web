@@ -291,6 +291,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-server-streaming"
+version = "0.1.0"
+dependencies = [
+ "hyper-rustls",
+ "hyper-util",
+ "lambda-grpc-web",
+ "prost",
+ "rustls",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tonic-web",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,7 +1,7 @@
 [workspace]
 members = [
     ".",
-    "examples/hello-world", "integration",
+    "examples/hello-world", "examples/server-streaming", "integration",
 ]
 
 [package]
