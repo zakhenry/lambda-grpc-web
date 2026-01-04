@@ -43,12 +43,13 @@ impl<L> LambdaServer<L> {
 
     pub fn add_service<S>(self, svc: S) -> LambdaRouter<L>
     where
-        S: Service<GrpcRequest, Response = GrpcResponse, Error = Infallible>
-            + NamedService
-            + Clone
-            + Send
-            + Sync
-            + 'static,
+        S: Service<Request<Body>, Error = Infallible>
+        + NamedService
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+        S::Response: axum::response::IntoResponse,
         S::Future: Send + 'static,
         L: Clone,
     {
@@ -62,12 +63,13 @@ impl<L> LambdaServer<L> {
 impl<L> LambdaRouter<L> {
     pub fn add_service<S>(mut self, svc: S) -> Self
     where
-        S: Service<GrpcRequest, Response = GrpcResponse, Error = Infallible>
-            + NamedService
-            + Clone
-            + Send
-            + Sync
-            + 'static,
+        S: Service<Request<Body>, Error = Infallible>
+        + NamedService
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+        S::Response: axum::response::IntoResponse,
         S::Future: Send + 'static,
     {
         self.routes = self.routes.add_service(svc);

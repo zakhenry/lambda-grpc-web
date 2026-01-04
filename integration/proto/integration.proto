@@ -21,7 +21,7 @@ message UnaryRequest {
 }
 
 message UnaryResponse {
-
+  optional string message = 1;
 }
 
 
@@ -30,16 +30,15 @@ message ServerStreamRequest {
     UNKNOWN = 0;
     EMPTY = 1; // success, but no content
     OK = 2; // success response
-    PANIC_AFTER_PARTIAL_RESPONSE = 3; // response, and then panic
-    IMMEDIATE_ERROR = 4; // no response, error occurs immediately.
-    ERROR_AFTER_PARTIAL_RESPONSE = 5; // response, then terminate with error
-    NEVER_RESPOND = 6;
+    IMMEDIATE_ERROR = 3; // no response, error occurs immediately.
+    ERROR_AFTER_PARTIAL_RESPONSE = 4; // response, then terminate with error
+    NEVER_RESPOND = 5;
   }
 
   StreamTestCase test_case = 1;
 }
 
 message ServerStreamResponse {
-
+  optional string message = 1;
 }
 
