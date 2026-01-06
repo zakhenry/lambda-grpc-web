@@ -2,6 +2,7 @@ mod log_layer;
 mod meta_echo_layer;
 mod auth_interceptor;
 
+use std::time::Duration;
 use crate::api::health_check_response::ServingStatus;
 use crate::api::health_server::{Health, HealthServer};
 use crate::api::server_stream_request::StreamTestCase;
@@ -20,6 +21,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::{pending, StreamExt};
 use tonic::{Request, Response, Status};
+use tracing_subscriber::{EnvFilter};
 
 pub mod api {
     tonic::include_proto!("integration.v1");
@@ -74,7 +76,13 @@ impl Test for IntegrationTestService {
                 StreamTestCase::Unknown => panic!("Unknown test case"),
                 StreamTestCase::Ok => {
                     tx.send(Ok(ServerStreamResponse {
-                        message: Some("ok response".to_string()),
+                        message: Some("ok first response".to_string()),
+                    }))
+                    .await
+                    .unwrap();
+
+                    tx.send(Ok(ServerStreamResponse {
+                        message: Some("ok second response".to_string()),
                     }))
                     .await
                     .unwrap();
@@ -86,14 +94,21 @@ impl Test for IntegrationTestService {
                         .unwrap();
                 }
                 StreamTestCase::ErrorAfterPartialResponse => {
+
+                    eprintln!("Sending first ok response");
                     tx.send(Ok(ServerStreamResponse {
                         message: Some("first ok response".to_string()),
                     }))
                     .await
                     .unwrap();
-                    tx.send(Err(Status::aborted("error after partial response")))
-                        .await
-                        .unwrap();
+
+                    eprintln!("Sending error response");
+                    let result = tx.send(Err(Status::aborted("error after partial response")))
+                        .await;
+                    eprintln!("Error send result: {:?}", result);
+
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    eprintln!("Task completing after delay");
                 }
                 StreamTestCase::NeverRespond => {
                     pending::<()>().next().await;
@@ -129,6 +144,13 @@ impl Health for HealthTestService {
 // build for aws with `cargo lambda build -p integration --release --output-format zip --arm64`
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("trace"))
+        .json()
+        .with_target(false)
+        .without_time() // Lambda adds its own timestamp
+        .init();
 
     LambdaServer::builder()
         .layer(LogServiceNameLayer::default())

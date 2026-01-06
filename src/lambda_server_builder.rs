@@ -1,13 +1,16 @@
+#[cfg(feature = "deadline")]
 use crate::deadline_layer::LambdaDeadlineLayer;
+#[cfg(feature = "wire-log")]
+use crate::wire_log::WireLogLayer;
 use http::{Request, Response};
 use lambda_runtime::Error;
 use std::any::Any;
 use std::convert::Infallible;
 use std::time::Duration;
-use tonic::Status;
 use tonic::body::Body;
 use tonic::server::NamedService;
 use tonic::service::Routes;
+use tonic::Status;
 use tonic_web::GrpcWebLayer;
 use tower::layer::util::{Identity, Stack};
 use tower::{Layer, Service, ServiceBuilder};
@@ -88,7 +91,12 @@ impl<L> LambdaRouter<L> {
             + Send
             + 'static,
     {
-        let service_builder = ServiceBuilder::new().layer(GrpcWebLayer::new());
+        let service_builder = ServiceBuilder::new();
+
+        #[cfg(feature = "wire-log")]
+        let service_builder = service_builder.layer(WireLogLayer);
+
+        let service_builder = service_builder.layer(GrpcWebLayer::new());
 
         #[cfg(feature = "catch-panic")]
         let service_builder = service_builder.layer(CatchPanicLayer::custom(
@@ -118,7 +126,7 @@ impl<L> LambdaRouter<L> {
                 let res = svc.call(req).await.expect("infallible");
                 let (parts, body) = res.into_parts();
                 let body =
-                    lambda_runtime::streaming::Body::new(tonic::service::AxumBody::new(body));
+                    lambda_runtime::streaming::Body::new(body);
                 Ok::<_, Error>(Response::from_parts(parts, body))
             }
         });

@@ -1,3 +1,4 @@
+use dotenvy_macro::dotenv;
 use crate::api::health_check_response::ServingStatus;
 use crate::api::health_client::HealthClient;
 use crate::api::server_stream_request::StreamTestCase;
@@ -7,6 +8,7 @@ use crate::api::{
     HealthCheckRequest, ServerStreamRequest, ServerStreamResponse, UnaryRequest, UnaryResponse,
 };
 use http::Uri;
+use http::header::CONTENT_TYPE;
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
@@ -14,6 +16,7 @@ use hyper_util::rt::TokioExecutor;
 use test_context::{AsyncTestContext, test_context};
 use tonic::body::Body;
 use tonic_web::{GrpcWebCall, GrpcWebClientLayer, GrpcWebClientService};
+use lambda_grpc_web::{WireLogLayer, WireLogService};
 
 pub mod api {
     tonic::include_proto!("integration.v1");
@@ -31,11 +34,10 @@ pub mod api {
 /// 5. execute integration tests
 
 struct IntegrationContext {
-    pub(crate) test_client:
-        TestClient<GrpcWebClientService<Client<HttpsConnector<HttpConnector>, GrpcWebCall<Body>>>>,
+    test_client:
+        TestClient<GrpcWebClientService<WireLogService<Client<HttpsConnector<HttpConnector>, GrpcWebCall<Body>>>>>,
     health_client: HealthClient<
-        GrpcWebClientService<Client<HttpsConnector<HttpConnector>, GrpcWebCall<Body>>>,
-    >,
+        GrpcWebClientService<WireLogService<Client<HttpsConnector<HttpConnector>, GrpcWebCall<Body>>>>>,
 }
 
 impl AsyncTestContext for IntegrationContext {
@@ -52,9 +54,11 @@ impl AsyncTestContext for IntegrationContext {
 
         let svc = tower::ServiceBuilder::new()
             .layer(GrpcWebClientLayer::new())
+            .layer(WireLogLayer)
             .service(client);
 
-        let origin: Uri = "http://0.0.0.0:9000".try_into().unwrap();
+        // configure at `.env` in repo root. Stops you accidentally committing unsecured function urls
+        let origin: Uri = dotenv!("ORIGIN_URI").try_into().unwrap();
 
         let test_client = TestClient::with_origin(svc.clone(), origin.clone());
         let health_client = HealthClient::with_origin(svc, origin.clone());
@@ -91,6 +95,11 @@ async fn test_unary_ok(ctx: &mut IntegrationContext) {
     let response = ctx.test_client.unary(request).await.unwrap();
 
     assert_eq!(
+        response.metadata().get(CONTENT_TYPE.as_str()).unwrap(),
+        "application/grpc-web+proto"
+    );
+
+    assert_eq!(
         response.into_inner(),
         UnaryResponse {
             message: Some("ok response".to_string()),
@@ -108,6 +117,10 @@ async fn test_unary_panic(ctx: &mut IntegrationContext) {
     let response = ctx.test_client.unary(request).await;
 
     let err = response.unwrap_err();
+    assert_eq!(
+        err.metadata().get(CONTENT_TYPE.as_str()).unwrap(),
+        "application/grpc-web+proto"
+    );
 
     assert_eq!(err.code(), tonic::Code::Internal);
     assert_eq!(err.message(), "panic test case");
@@ -128,7 +141,7 @@ async fn test_unary_lambda_context(ctx: &mut IntegrationContext) {
         .unwrap()
         .to_str()
         .unwrap();
-    let deadline_ms = header_value.parse::<u32>().unwrap();
+    let deadline_ms = header_value.parse::<u64>().unwrap();
 
     dbg!(deadline_ms);
     assert!(deadline_ms > 0);
@@ -149,9 +162,20 @@ async fn test_stream_ok(ctx: &mut IntegrationContext) {
     assert_eq!(
         message,
         ServerStreamResponse {
-            message: Some("ok response".to_string()),
+            message: Some("ok first response".to_string()),
         }
     );
+
+    let message = stream.message().await.unwrap().expect("stream message");
+    assert_eq!(
+        message,
+        ServerStreamResponse {
+            message: Some("ok second response".to_string()),
+        }
+    );
+
+    let message = stream.message().await.unwrap();
+    assert_eq!( message, None);
 }
 
 #[test_context(IntegrationContext)]
@@ -170,6 +194,23 @@ async fn test_stream_empty(ctx: &mut IntegrationContext) {
 
 #[test_context(IntegrationContext)]
 #[tokio::test]
+async fn test_stream_error(ctx: &mut IntegrationContext) {
+    let request = tonic::Request::new(ServerStreamRequest {
+        test_case: StreamTestCase::ImmediateError.into(),
+    });
+
+    let response = ctx.test_client.server_stream(request).await.unwrap();
+
+    let mut stream = response.into_inner();
+
+    let err = stream.message().await.unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::Internal);
+    assert_eq!(err.message(), "immediate error");
+}
+
+#[test_context(IntegrationContext)]
+#[tokio::test]
 async fn test_stream_error_after_partial_response(ctx: &mut IntegrationContext) {
     let request = tonic::Request::new(ServerStreamRequest {
         test_case: StreamTestCase::ErrorAfterPartialResponse.into(),
@@ -177,16 +218,29 @@ async fn test_stream_error_after_partial_response(ctx: &mut IntegrationContext) 
 
     let response = ctx.test_client.server_stream(request).await.unwrap();
 
+    dbg!(response.metadata());
+
     let mut stream = response.into_inner();
 
     let response = stream.message().await.unwrap().expect("stream message");
 
     assert_eq!(response.message.unwrap().as_str(), "first ok response");
 
-    let err_status = stream.message().await.unwrap_err();
+    let next_message = stream.message().await;
 
-    assert_eq!(err_status.code(), tonic::Code::Aborted);
-    assert_eq!(err_status.message(), "error after partial response");
+    match next_message {
+        Err(err_status) => {
+            // expected case
+            assert_eq!(err_status.code(), tonic::Code::Aborted);
+            assert_eq!(err_status.message(), "error after partial response");
+        }
+        _ => {
+            dbg!(next_message);
+            dbg!(stream.trailers().await);
+
+            panic!("unexpected empty response");
+        }
+    }
 }
 
 #[test_context(IntegrationContext)]
@@ -199,6 +253,10 @@ async fn test_stream_no_response(ctx: &mut IntegrationContext) {
     let response = ctx.test_client.server_stream(request).await.unwrap();
 
     let mut stream = response.into_inner();
+
+    // let next = stream.message().await;
+    // dbg!(next);
+    // dbg!(stream.trailers().await);
 
     let result =
         tokio::time::timeout(std::time::Duration::from_millis(100), stream.message()).await;
@@ -215,7 +273,9 @@ async fn test_meta_echo_tower_layer(ctx: &mut IntegrationContext) {
         test_case: UnaryTestCase::Ok.into(),
     });
 
-    request.metadata_mut().insert("echo-meta", "abc-123".parse().unwrap());
+    request
+        .metadata_mut()
+        .insert("echo-meta", "abc-123".parse().unwrap());
 
     let response = ctx.test_client.unary(request).await.unwrap();
 
@@ -229,7 +289,9 @@ async fn test_auth_interceptor(ctx: &mut IntegrationContext) {
         test_case: UnaryTestCase::Ok.into(),
     });
 
-    request.metadata_mut().insert("authorization", "reject".parse().unwrap());
+    request
+        .metadata_mut()
+        .insert("authorization", "reject".parse().unwrap());
 
     let err_response = ctx.test_client.unary(request).await.unwrap_err();
 

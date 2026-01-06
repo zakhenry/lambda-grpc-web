@@ -7,7 +7,6 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
-use tonic::service::Routes;
 use tonic::{Request, Response, Status};
 
 pub mod hello_world {
@@ -104,7 +103,7 @@ mod tests {
 
         let client = GreeterClient::with_origin(
             svc,
-            "http://0.0.0.0:9000/lambda-url/example-hello-world".try_into()?,
+            "http://0.0.0.0:9000/lambda-url/example-server-streaming".try_into()?,
         );
 
         Ok(client)
