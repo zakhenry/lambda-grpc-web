@@ -8,6 +8,9 @@ members = [
 name = "lambda-grpc-web"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/zakhenry/lambda-grpc-web"
+description = "grpc-web framed tonic service adaptor to aws lambda runtime"
 
 [lib]
 name = "lambda_grpc_web"
@@ -35,10 +38,6 @@ http-body-util = { version = "0.1.3", optional = true }
 bytes = { version = "1.11.0", optional = true }
 
 [dev-dependencies]
-
-
-[build-dependencies]
-tonic-prost-build = "0.14.2"
 
 [patch.crates-io]
 #tonic-web = { path = "../tonic/tonic-web" }
