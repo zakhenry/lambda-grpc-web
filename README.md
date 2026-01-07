@@ -2,33 +2,15 @@
 
 Run **[Tonic](https://github.com/hyperium/tonic) gRPC services on AWS Lambda**.
 
-This crate makes gRPC usable on Lambda, but with unavoidable tradeoffs.
+This crate makes [gRPC](https://grpc.io) usable on [AWS Lambda](https://aws.amazon.com/lambda/), with [grpc-web message framing](https://grpc.github.io/grpc/core/md_doc__p_r_o_t_o_c_o_l-_w_e_b.html) as lambda-compatible http/1.1 transport.
 
-It is designed for:
+This enables serverless deployments for gRPC workloads that are spiky, generally low volume (i.e. benefit from being
+able to need to scale to zero), and typically are connect to from web browsers (i.e. already limited to using gRPC web 
+protocol)
 
-- Unary gRPC APIs
-- Short-lived server streaming
-- Scale-to-zero, low-ops deployments
-
-It is *not* a full replacement for a native HTTP/2 gRPC server.
-
----
-
-## What this is (and is not)
-
-### This crate **does**
-
-- Run existing `tonic` services on AWS Lambda
-- Preserve Tower middleware composition
-- Support gRPC-Web clients
-- Work with Lambda Function URLs / API Gateway
-
-### This crate **does not**
-
-- Provide full HTTP/2 semantics
-- Support bidirectional or client streaming
-- Preserve connection-level state (note client cancellations is not possible)
-- Eliminate Lambda cold starts or latency tradeoffs
+> [!IMPORTANT]
+> This is *not* a full replacement for a native http/2 gRPC server. Limitations inherent to the AWS lambda runtime apply
+> [See below](#supported-features) for more detail of supported capabilities
 
 ---
 
@@ -97,62 +79,32 @@ Important note - the grpc service frames messages with grpc-web - your test clie
 
 Compile with cargo lambda (refer to their docs)
 
-#### Tips:
-* Make sure to configure invoke mode as `RESPONSE_STREAM`
-* Configure a sensible timeout as client disconnects cannot propagate to lambda cancellation.
+> [!TIP]
+> * Make sure to configure invoke mode as `RESPONSE_STREAM`
+> * Configure a sensible timeout as client disconnects cannot propagate to lambda cancellation.
 
 ## Supported features
 
-| Feature                     | Status        |
-| --------------------------- |---------------|
-| Unary RPCs                  | Supported     |
-| Server streaming            | Limited       |
-| Client streaming            | Not supported |
-| Bidirectional streaming     | Not supported |
-| Interceptors / Tower layers | Supported     |
-| Trailers                    | Supported     |
+| Feature                     | Status        | Note                      |
+|-----------------------------|---------------|---------------------------|
+| Unary RPCs                  | Supported     |                           |
+| Server streaming            | Limited       | Capped by lambda timeout  |
+| Client streaming            | Not supported | Not supported in gRPC web |
+| Bidirectional streaming     | Not supported | Not supported in gRPC web |
+| Interceptors / Tower layers | Supported     |                           |
+| Metadata (Headers+Trailers) | Supported     |                           |
 
 ---
 
-## Compatibility notes
+## Performance
 
-### Transport
+Since this is a serverless environment, it is subject to cold start times. While Rust runtime is very fast 
+(typically 20-30ms), it is not going to be as fast as a standard always-running gRPC service on ECS or similar.
 
-- Requests are handled via **HTTP/1.1**
-- gRPC-Web framing is used
-- HTTP/2-specific features are unavailable
+When executing on a warm instance, latency should be very low albeit with minor overhead from the grpc-web framing.
 
-### Middleware
-
-Works:
-
-- Logging
-- Auth
-- Metrics
-- Deadlines (request-scoped)
-
-Does **not** work as expected:
-
-- Middleware requiring connection state
-- Peer IP / TLS inspection
-- Channel-level interceptors
-
----
-
-## Performance expectations
-
-This crate optimizes for:
-
-- Operational simplicity
-- Cost efficiency
-- Scale-to-zero workloads
-
-It does **not** optimize for:
-
-- Lowest possible latency (cold starts while fast in rust still add latency)
-- Long-lived connections (Lambda has a 15-minute hard maximum duration)
-
-If you need those, run native gRPC behind ALB / ECS / EC2.
+*If maximum performance is your goal, gRPC might not be the best fit to begin with*. For nearly all other workloads, 
+this architecture will be more than fast enough.
 
 ---
 
