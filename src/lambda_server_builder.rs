@@ -4,16 +4,18 @@ use crate::deadline_layer::LambdaDeadlineLayer;
 use crate::wire_log::WireLogLayer;
 use http::{Request, Response};
 use lambda_runtime::Error;
-use std::any::Any;
 use std::convert::Infallible;
+#[cfg(feature = "deadline")]
 use std::time::Duration;
+#[cfg(feature = "catch-panic")]
+use tonic::Status;
 use tonic::body::Body;
 use tonic::server::NamedService;
 use tonic::service::Routes;
-use tonic::Status;
 use tonic_web::GrpcWebLayer;
 use tower::layer::util::{Identity, Stack};
 use tower::{Layer, Service, ServiceBuilder};
+#[cfg(feature = "catch-panic")]
 use tower_http::catch_panic::CatchPanicLayer;
 
 type GrpcRequest = Request<Body>;
@@ -47,11 +49,11 @@ impl<L> LambdaServer<L> {
     pub fn add_service<S>(self, svc: S) -> LambdaRouter<L>
     where
         S: Service<Request<Body>, Error = Infallible>
-        + NamedService
-        + Clone
-        + Send
-        + Sync
-        + 'static,
+            + NamedService
+            + Clone
+            + Send
+            + Sync
+            + 'static,
         S::Response: axum::response::IntoResponse,
         S::Future: Send + 'static,
         L: Clone,
@@ -67,11 +69,11 @@ impl<L> LambdaRouter<L> {
     pub fn add_service<S>(mut self, svc: S) -> Self
     where
         S: Service<Request<Body>, Error = Infallible>
-        + NamedService
-        + Clone
-        + Send
-        + Sync
-        + 'static,
+            + NamedService
+            + Clone
+            + Send
+            + Sync
+            + 'static,
         S::Response: axum::response::IntoResponse,
         S::Future: Send + 'static,
     {
@@ -100,7 +102,7 @@ impl<L> LambdaRouter<L> {
 
         #[cfg(feature = "catch-panic")]
         let service_builder = service_builder.layer(CatchPanicLayer::custom(
-            |err: Box<dyn Any + Send + 'static>| {
+            |err: Box<dyn std::any::Any + Send + 'static>| {
                 let details = if let Some(s) = err.downcast_ref::<String>() {
                     s.clone()
                 } else if let Some(s) = err.downcast_ref::<&str>() {
@@ -119,18 +121,6 @@ impl<L> LambdaRouter<L> {
 
         let svc = service_builder.service(self.service_builder.service(self.routes));
 
-        let handler = tower::service_fn(move |req: lambda_http::Request| {
-            let mut svc = svc.clone();
-            async move {
-                let req = req.map(|body| Body::new(tonic::service::AxumBody::new(body)));
-                let res = svc.call(req).await.expect("infallible");
-                let (parts, body) = res.into_parts();
-                let body =
-                    lambda_runtime::streaming::Body::new(body);
-                Ok::<_, Error>(Response::from_parts(parts, body))
-            }
-        });
-
-        lambda_http::run_with_streaming_response(handler).await
+        crate::transport::run(svc).await
     }
 }

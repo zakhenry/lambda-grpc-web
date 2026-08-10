@@ -1,0 +1,70 @@
+# Fronts the deployed `example-envoy` function with Envoy's aws_lambda http filter.
+#
+# A downstream grpc-web client talks to Envoy on :10000, Envoy invokes the lambda with its JSON
+# envelope, and the grpc-web body passes through untouched in both directions. A *native* gRPC
+# client over http/2 will not work - see the README for why.
+#
+#   envoy -c envoy.yaml
+#
+# Envoy signs the invoke request with the credentials it finds in the usual places
+# (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, the ECS/EC2 metadata endpoints, ...).
+
+static_resources:
+  listeners:
+    - name: grpc_web
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 10000 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: grpc_web
+                route_config:
+                  name: local
+                  virtual_hosts:
+                    - name: greeter
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/helloworld.Greeter/" }
+                          route:
+                            cluster: lambda_greeter
+                            # the lambda is buffered, so give it room to cold start
+                            timeout: 30s
+                http_filters:
+                  - name: envoy.filters.http.aws_lambda
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.aws_lambda.v3.Config
+                      arn: "arn:aws:lambda:eu-west-1:123456789012:function:example-envoy"
+                      # required: with passthrough enabled the function receives the raw body with
+                      # no path and no content-type, leaving nothing to route a gRPC method on
+                      payload_passthrough: false
+                      invocation_mode: SYNCHRONOUS
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: lambda_greeter
+      type: LOGICAL_DNS
+      connect_timeout: 5s
+      # tells the aws_lambda filter that this cluster is a lambda egress gateway rather than an
+      # ordinary upstream - without it the filter leaves the request alone
+      metadata:
+        filter_metadata:
+          com.amazonaws.lambda:
+            egress_gateway: true
+      load_assignment:
+        cluster_name: lambda_greeter
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: lambda.eu-west-1.amazonaws.com
+                      port_value: 443
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: lambda.eu-west-1.amazonaws.com

@@ -1,0 +1,39 @@
+# Deliberately its own workspace rather than a member of the root one: cargo unifies features
+# across the members it builds together, and this crate asks for `transport-envoy` while the other
+# examples ask for `transport-apigw-http`. See the `exclude` note in the root `Cargo.toml`.
+[workspace]
+
+[package]
+name = "example-envoy"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+lambda-grpc-web = { path = "../../", features = ["transport-envoy"] }
+# pinned exactly: the `[patch.crates-io]` below replaces tonic with the 0.14.2 fork, and a later
+# tonic-prost would demand a tonic newer than the fork provides
+tonic = "=0.14.2"
+tonic-prost = "=0.14.2"
+prost = "0.14"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+hyper-util = { version = "0.1.19", features = ["client-legacy", "http1"] }
+http = "1.4.0"
+http-body = "1.0.1"
+http-body-util = "0.1.3"
+bytes = "1.11.0"
+serde_json = "1.0.145"
+tower = "0.5.2"
+# the grpc-web framing on both sides of the test is tonic-web's, via its public client layer
+tonic-web = "=0.14.2"
+
+[build-dependencies]
+tonic-prost-build = "=0.14.2"
+
+# mirrors the root workspace - this crate is its own workspace root, so it needs its own copy.
+# revert when https://github.com/hyperium/tonic/pull/2474 is merged
+[patch.crates-io]
+tonic-web = { git = "https://github.com/zakhenry/tonic", rev = "c3d84d77db4803ef54948aab4fe97c67150329ce" }
+tonic = { git = "https://github.com/zakhenry/tonic", rev = "c3d84d77db4803ef54948aab4fe97c67150329ce" }

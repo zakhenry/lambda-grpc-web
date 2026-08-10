@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-lambda-grpc-web = {path = "../", default-features = true, features = ["wire-log"]}
+lambda-grpc-web = { path = "../", features = ["transport-apigw-http", "wire-log"] }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 tokio-stream = "0.1.17"
 hyper-util = "0.1.19"

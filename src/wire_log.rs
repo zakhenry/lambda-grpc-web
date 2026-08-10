@@ -1,7 +1,7 @@
 //! This mod is exported only as a utility, do not consider it a part of the true public api of the
 //! lambda_grpc_web crate. The purpose is to help diagnose issue with aws lambda interop by logging
 //! the low level messages sent on the wire.
-//! 
+//!
 //! Define it as a tower layer either before or after the grpc web layers to make sense of the raw
 //! lambda request/response or how the grpc layer was interpreted.
 
@@ -26,7 +26,6 @@ where
     type Data = Bytes;
     type Error = B::Error;
 
-
     fn poll_frame(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -40,7 +39,12 @@ where
             Poll::Ready(Some(Ok(frame))) => {
                 this.frame_count += 1;
                 if let Some(data) = frame.data_ref() {
-                    eprintln!("Frame {}: DATA {} bytes: {:?}", this.frame_count, data.len(), data);
+                    eprintln!(
+                        "Frame {}: DATA {} bytes: {:?}",
+                        this.frame_count,
+                        data.len(),
+                        data
+                    );
                 } else if let Some(trailers) = frame.trailers_ref() {
                     eprintln!("Frame {}: TRAILERS {:?}", this.frame_count, trailers);
                 } else {
@@ -110,7 +114,10 @@ where
             eprintln!("Status: {:?}", parts.status);
             eprintln!("Headers: {:?}", parts.headers);
 
-            let logged_body = LoggingBody { inner: body, frame_count: 0 };
+            let logged_body = LoggingBody {
+                inner: body,
+                frame_count: 0,
+            };
             let boxed_body = logged_body.boxed_unsync();
 
             Ok(Response::from_parts(parts, boxed_body))
