@@ -1,8 +1,7 @@
+mod auth_interceptor;
 mod log_layer;
 mod meta_echo_layer;
-mod auth_interceptor;
 
-use std::time::Duration;
 use crate::api::health_check_response::ServingStatus;
 use crate::api::health_server::{Health, HealthServer};
 use crate::api::server_stream_request::StreamTestCase;
@@ -15,13 +14,14 @@ use crate::api::{
 use crate::auth_interceptor::AuthInterceptor;
 use crate::log_layer::LogServiceNameLayer;
 use crate::meta_echo_layer::MetaEchoLayer;
-use lambda_grpc_web::lambda_runtime::{Context, Error};
 use lambda_grpc_web::LambdaServer;
+use lambda_grpc_web::lambda_runtime::{Context, Error};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::{pending, StreamExt};
+use tokio_stream::{StreamExt, pending};
 use tonic::{Request, Response, Status};
-use tracing_subscriber::{EnvFilter};
+use tracing_subscriber::EnvFilter;
 
 pub mod api {
     tonic::include_proto!("integration.v1");
@@ -94,7 +94,6 @@ impl Test for IntegrationTestService {
                         .unwrap();
                 }
                 StreamTestCase::ErrorAfterPartialResponse => {
-
                     eprintln!("Sending first ok response");
                     tx.send(Ok(ServerStreamResponse {
                         message: Some("first ok response".to_string()),
@@ -103,7 +102,8 @@ impl Test for IntegrationTestService {
                     .unwrap();
 
                     eprintln!("Sending error response");
-                    let result = tx.send(Err(Status::aborted("error after partial response")))
+                    let result = tx
+                        .send(Err(Status::aborted("error after partial response")))
                         .await;
                     eprintln!("Error send result: {:?}", result);
 
@@ -144,7 +144,6 @@ impl Health for HealthTestService {
 // build for aws with `cargo lambda build -p integration --release --output-format zip --arm64`
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("trace"))
         .json()
@@ -153,13 +152,15 @@ async fn main() -> Result<(), Error> {
         .init();
 
     LambdaServer::builder()
-        .layer(LogServiceNameLayer::default())
-        .layer(MetaEchoLayer::default())
-        .add_service(TestServer::with_interceptor(IntegrationTestService, AuthInterceptor))
+        .layer(LogServiceNameLayer)
+        .layer(MetaEchoLayer)
+        .add_service(TestServer::with_interceptor(
+            IntegrationTestService,
+            AuthInterceptor,
+        ))
         .add_service(HealthServer::new(HealthTestService))
-        .serve()
+        .serve_apigw_http()
         .await?;
 
     Ok(())
-
 }

@@ -1,4 +1,4 @@
-//! This is an example of a generic tower middleware that copies http header value for 
+//! This is an example of a generic tower middleware that copies http header value for
 //! key `echo-meta` into `meta-value` if present. It is used by the integration test to verify
 //! standard tower middleware functions as expected
 

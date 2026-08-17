@@ -1,0 +1,9 @@
+{
+  "raw_path": "/helloworld.Greeter/SayHello",
+  "method": "POST",
+  "headers": {
+    "content-type": "application/grpc-web+proto"
+  },
+  "body": "AAAAABEKD2dycGMgd2ViIGNsaWVudA==",
+  "is_base64_encoded": true
+}

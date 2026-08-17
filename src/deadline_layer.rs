@@ -1,6 +1,6 @@
-use lambda_http::http::{Request, Response};
-use lambda_http::tracing::log::{error, info, warn};
+use http::{Request, Response};
 use lambda_runtime::Context as LambdaContext;
+use lambda_runtime::tracing::log::{error, info, warn};
 use std::{
     future::Future,
     pin::Pin,

@@ -1,16 +1,16 @@
 //! This mod is exported only as a utility, do not consider it a part of the true public api of the
 //! lambda_grpc_web crate. The purpose is to help diagnose issue with aws lambda interop by logging
 //! the low level messages sent on the wire.
-//! 
+//!
 //! Define it as a tower layer either before or after the grpc web layers to make sense of the raw
 //! lambda request/response or how the grpc layer was interpreted.
 
 use bytes::Bytes;
 use http::{Request, Response};
 use http_body::{Body as HttpBody, Frame};
-use http_body_util::BodyExt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tonic::body::Body;
 use tower::Layer;
 use tower::Service;
 
@@ -26,7 +26,6 @@ where
     type Data = Bytes;
     type Error = B::Error;
 
-
     fn poll_frame(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -40,7 +39,12 @@ where
             Poll::Ready(Some(Ok(frame))) => {
                 this.frame_count += 1;
                 if let Some(data) = frame.data_ref() {
-                    eprintln!("Frame {}: DATA {} bytes: {:?}", this.frame_count, data.len(), data);
+                    eprintln!(
+                        "Frame {}: DATA {} bytes: {:?}",
+                        this.frame_count,
+                        data.len(),
+                        data
+                    );
                 } else if let Some(trailers) = frame.trailers_ref() {
                     eprintln!("Frame {}: TRAILERS {:?}", this.frame_count, trailers);
                 } else {
@@ -92,7 +96,10 @@ where
     ResBody: HttpBody<Data = Bytes> + Send + 'static,
     ResBody::Error: std::error::Error + Send + Sync + 'static,
 {
-    type Response = Response<http_body_util::combinators::UnsyncBoxBody<Bytes, ResBody::Error>>;
+    // The logged body is erased into tonic's `Body` rather than a box of its own, so that adding
+    // this layer does not change the type of the response coming out of the stack. That is what
+    // lets `LambdaServer` assemble one stack for either transport regardless of this feature.
+    type Response = Response<Body>;
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -110,10 +117,12 @@ where
             eprintln!("Status: {:?}", parts.status);
             eprintln!("Headers: {:?}", parts.headers);
 
-            let logged_body = LoggingBody { inner: body, frame_count: 0 };
-            let boxed_body = logged_body.boxed_unsync();
+            let logged_body = LoggingBody {
+                inner: body,
+                frame_count: 0,
+            };
 
-            Ok(Response::from_parts(parts, boxed_body))
+            Ok(Response::from_parts(parts, Body::new(logged_body)))
         })
     }
 }

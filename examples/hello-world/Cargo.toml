@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-lambda-grpc-web = {path = "../../"}
+lambda-grpc-web = { path = "../../", features = ["transport-apigw-http"] }
 tonic = "*"
 prost = "0.14"
 tonic-prost = "*"

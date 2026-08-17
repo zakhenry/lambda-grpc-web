@@ -1,4 +1,3 @@
-use dotenvy_macro::dotenv;
 use crate::api::health_check_response::ServingStatus;
 use crate::api::health_client::HealthClient;
 use crate::api::server_stream_request::StreamTestCase;
@@ -7,37 +6,40 @@ use crate::api::unary_request::UnaryTestCase;
 use crate::api::{
     HealthCheckRequest, ServerStreamRequest, ServerStreamResponse, UnaryRequest, UnaryResponse,
 };
+use dotenvy_macro::dotenv;
 use http::Uri;
 use http::header::CONTENT_TYPE;
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
+use lambda_grpc_web::{WireLogLayer, WireLogService};
 use test_context::{AsyncTestContext, test_context};
 use tonic::body::Body;
 use tonic_web::{GrpcWebCall, GrpcWebClientLayer, GrpcWebClientService};
-use lambda_grpc_web::{WireLogLayer, WireLogService};
 
 pub mod api {
     tonic::include_proto!("integration.v1");
     tonic::include_proto!("grpc.health.v1");
 }
 
-/// Note these tests are not self-contained yet. currently the process is to run with cargo lambda:
-/// `cargo lambda watch -p integration`
-/// and then run the tests from this crate. Future plan:
-///
-/// 1. create a binary server implementing the above api
-/// 2. define docker build to build using cargo lambda
-/// 3. extend same dockerfile to copy that built bin to image based on https://hub.docker.com/r/amazon/aws-lambda-provided
-/// 4. configure integration tests to use testcontainers to build and start the lambda
-/// 5. execute integration tests
+// Note these tests are not self-contained yet. currently the process is to run with cargo lambda:
+// `cargo lambda watch -p integration`
+// and then run the tests from this crate. Future plan:
+//
+// 1. create a binary server implementing the above api
+// 2. define docker build to build using cargo lambda
+// 3. extend same dockerfile to copy that built bin to image based on https://hub.docker.com/r/amazon/aws-lambda-provided
+// 4. configure integration tests to use testcontainers to build and start the lambda
+// 5. execute integration tests
+
+/// The transport both clients sit on: an https client, wire logging, then grpc-web framing.
+type Transport =
+    GrpcWebClientService<WireLogService<Client<HttpsConnector<HttpConnector>, GrpcWebCall<Body>>>>;
 
 struct IntegrationContext {
-    test_client:
-        TestClient<GrpcWebClientService<WireLogService<Client<HttpsConnector<HttpConnector>, GrpcWebCall<Body>>>>>,
-    health_client: HealthClient<
-        GrpcWebClientService<WireLogService<Client<HttpsConnector<HttpConnector>, GrpcWebCall<Body>>>>>,
+    test_client: TestClient<Transport>,
+    health_client: HealthClient<Transport>,
 }
 
 impl AsyncTestContext for IntegrationContext {
@@ -175,7 +177,7 @@ async fn test_stream_ok(ctx: &mut IntegrationContext) {
     );
 
     let message = stream.message().await.unwrap();
-    assert_eq!( message, None);
+    assert_eq!(message, None);
 }
 
 #[test_context(IntegrationContext)]
@@ -235,8 +237,8 @@ async fn test_stream_error_after_partial_response(ctx: &mut IntegrationContext) 
             assert_eq!(err_status.message(), "error after partial response");
         }
         _ => {
-            dbg!(next_message);
-            dbg!(stream.trailers().await);
+            let _ = dbg!(next_message);
+            let _ = dbg!(stream.trailers().await);
 
             panic!("unexpected empty response");
         }

@@ -16,6 +16,29 @@ protocol)
 
 ## Quick start
 
+### 0. Pick a transport
+
+A lambda function is invoked with a JSON event whose shape is decided by whatever sits in front of
+it, so the transport has to be enabled explicitly. There is deliberately **no default**:
+
+| Feature                | Invoked by                                             | Serve with           | Lambda invoke mode |
+|------------------------|--------------------------------------------------------|----------------------|--------------------|
+| `transport-apigw-http` | API Gateway HTTP API (v2), Lambda function URLs         | `serve_apigw_http()` | `RESPONSE_STREAM`  |
+| `transport-envoy`      | Envoy's [`aws_lambda` http filter][envoy-lambda-filter] | `serve_envoy()`      | `BUFFERED`         |
+
+```toml
+[dependencies]
+lambda-grpc-web = { version = "0.4", features = ["transport-apigw-http"] }
+```
+
+The features are **additive**: enabling both compiles both, so a workspace can have one function
+behind API Gateway and another behind Envoy without cargo's feature unification getting in the way.
+Which one a server uses is decided by the `serve_*` method it calls, and it can only call one. The
+rest of the API is identical either way — nothing below changes apart from the deployment notes in
+[step 3](#3-deploy).
+
+[envoy-lambda-filter]: https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/aws_lambda_filter.html
+
 ### 1. Write service
 Define a normal Tonic service, and substitute only the `tonic::transport::Server` builder with `lambda_grpc_web::LambdaServer`
 
@@ -58,7 +81,7 @@ async fn main() -> Result<(), Error> { // <- note error here is `lambda_grpc_web
 
     LambdaServer::builder() // <- Different builder
         .add_service(GreeterServer::new(greeter))
-        .serve() // <- no socket declared
+        .serve_apigw_http() // <- no socket declared, just the transport picked in step 0
         .await?;
 
     Ok(())
@@ -80,19 +103,138 @@ Important note - the grpc service frames messages with grpc-web - your test clie
 Compile with cargo lambda (refer to their docs)
 
 > [!TIP]
-> * Make sure to configure invoke mode as `RESPONSE_STREAM`
-> * Configure a sensible timeout as client disconnects cannot propagate to lambda cancellation.
+> Configure a sensible timeout as client disconnects cannot propagate to lambda cancellation. This
+> applies to both transports.
+
+#### With `transport-apigw-http`
+
+> [!IMPORTANT]
+> Configure the invoke mode as `RESPONSE_STREAM`. Responses are streamed frame by frame, so a
+> server streaming RPC is delivered incrementally.
+
+#### With `transport-envoy`
+
+> [!IMPORTANT]
+> Configure the invoke mode as `BUFFERED`, **not** `RESPONSE_STREAM`. Envoy's filter calls the
+> buffered `Invoke` api and has no way to consume a streamed response.
+
+Envoy invokes the function directly, so there is no API Gateway in the picture:
+
+```yaml
+route_config:
+  virtual_hosts:
+    - name: grpc_web
+      domains: ["*"]
+      routes:
+        - match: { prefix: "/" }
+          route: { cluster: lambda_greeter }
+
+http_filters:
+  - name: envoy.filters.http.aws_lambda
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.filters.http.aws_lambda.v3.Config
+      arn: "arn:aws:lambda:eu-west-1:123456789012:function:greeter"
+      # required - see the payload_passthrough note below
+      payload_passthrough: false
+      invocation_mode: SYNCHRONOUS
+
+clusters:
+  - name: lambda_greeter
+    type: LOGICAL_DNS
+    # per-route metadata that tells the filter this cluster is a lambda egress gateway
+    metadata:
+      filter_metadata:
+        com.amazonaws.lambda:
+          egress_gateway: true
+    load_assignment:
+      cluster_name: lambda_greeter
+      endpoints:
+        - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address: { address: lambda.eu-west-1.amazonaws.com, port_value: 443 }
+    transport_socket:
+      name: envoy.transport_sockets.tls
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+        sni: lambda.eu-west-1.amazonaws.com
+```
+
+##### The downstream client must still speak grpc-web
+
+Adding Envoy in front does **not** make the service reachable from an ordinary HTTP/2 gRPC client.
+
+* ✅ `grpc-web client → Envoy → Lambda` — Envoy is a routing / auth / mesh hop, and the grpc-web
+  body (including its in-body trailer frame) passes through the JSON envelope untouched in both
+  directions. This is what the feature is for.
+* ❌ `gRPC client (HTTP/2) → Envoy → Lambda` — the *request* direction happens to work, because
+  gRPC and grpc-web use identical 5 byte message framing. The *response* direction does not: the
+  lambda returns grpc-web with trailers packed into the body, and nothing in the stock filter
+  chain unpacks that back into HTTP/2 trailers. The client sees a stray `0x80` frame at the end of
+  the body and no `grpc-status`, and errors.
+
+Envoy's `envoy.filters.http.grpc_web` filter converts the *opposite* direction (downstream
+grpc-web → upstream gRPC), so it does not help here. Converting downstream gRPC → upstream
+grpc-web needs a dynamic module, currently blocked on
+[envoyproxy/envoy#42559](https://github.com/envoyproxy/envoy/issues/42559).
+
+##### Testing without an Envoy
+
+Envoy invokes the function with a JSON envelope rather than proxying http to it, so there is no
+endpoint to point a gRPC client at. The envelope types are exported for this — `EnvoyRequest::new`
+takes the *unencoded* grpc-web body and applies the base64 Envoy would, and `EnvoyResponse::body`
+takes it back off:
+
+```rust
+use lambda_grpc_web::{EnvoyRequest, EnvoyResponse};
+
+let event = EnvoyRequest::new("/helloworld.Greeter/SayHello", grpc_web_frames);
+let response: EnvoyResponse = serde_json::from_slice(&invoke(serde_json::to_vec(&event)?)?)?;
+
+assert_eq!(response.status_code(), 200); // a gRPC error is a 200 too, see the trailer frame
+let grpc_web_body = response.body()?;   // base64 layer removed
+```
+
+You do not have to frame the grpc-web body yourself: drop that conversion in as the innermost
+service under `tonic_web::GrpcWebClientLayer` and the generated Tonic client works unchanged, with
+real `Status` errors and metadata.
+
+A worked example — service, `envoy.yaml`, and a test doing exactly that against the
+`cargo lambda watch` emulator — is in [`examples/envoy`](examples/envoy). It sits in the same
+workspace as the API Gateway examples, which is the arrangement the additive transport features
+exist to allow:
+
+```shell
+cargo lambda watch -p example-envoy                                                 # terminal 1
+cargo lambda invoke example-envoy --data-file examples/envoy/events/say_hello.json  # terminal 2
+```
+
+##### Limitations
+
+* **`payload_passthrough: true` is not supported.** With passthrough enabled the function receives
+  the raw body with no path and no `content-type`, which leaves nothing to route a gRPC method on.
+* **Repeated request metadata arrives coalesced.** Envoy's envelope carries headers as a flat map,
+  having already joined repeated headers into a single comma separated value. Repeated
+  `grpc-metadata-*` keys therefore arrive as one value, and splitting them back apart is not
+  attempted because it would corrupt values that legitimately contain commas.
+* **Server streaming is buffered** — see below.
 
 ## Supported features
 
-| Feature                     | Status        | Note                      |
-|-----------------------------|---------------|---------------------------|
-| Unary RPCs                  | Supported     |                           |
-| Server streaming            | Limited       | Capped by lambda timeout  |
-| Client streaming            | Not supported | Not supported in gRPC web |
-| Bidirectional streaming     | Not supported | Not supported in gRPC web |
-| Interceptors / Tower layers | Supported     |                           |
-| Metadata (Headers+Trailers) | Supported     |                           |
+| Feature                     | Status        | Note                                                                                    |
+|-----------------------------|---------------|-----------------------------------------------------------------------------------------|
+| Unary RPCs                  | Supported     |                                                                                         |
+| Server streaming            | Limited       | `transport-apigw-http`: streamed, capped by lambda timeout. `transport-envoy`: buffered¹ |
+| Client streaming            | Not supported | Not supported in gRPC web                                                               |
+| Bidirectional streaming     | Not supported | Not supported in gRPC web                                                               |
+| Interceptors / Tower layers | Supported     |                                                                                         |
+| Metadata (Headers+Trailers) | Supported     | `transport-envoy`: repeated request metadata arrives coalesced                          |
+
+¹ Under `transport-envoy` the whole stream is collected before anything is returned, so it is
+bounded by the lambda **response payload size limit** as well as the timeout, and messages are not
+delivered incrementally. A warning is logged when a buffered response turns out to contain more
+than one message — including for `application/grpc-web-text`, the variant a browser client asks
+for, where the count means decoding `tonic-web`'s per frame base64 first.
 
 ---
 
@@ -111,3 +253,10 @@ this architecture will be more than fast enough.
 ## Future work
 * Support managed lambdas - should mostly just work
 * Flesh out docs as more of a tutorial style including deployment
+
+---
+
+## Contributing
+
+Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get set
+up, run the checks locally, and what a change needs to include.

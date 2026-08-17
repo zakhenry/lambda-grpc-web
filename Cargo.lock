@@ -293,6 +293,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-envoy"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper-util",
+ "lambda-grpc-web",
+ "prost",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tonic-web",
+ "tower",
+]
+
+[[package]]
 name = "example-hello-world"
 version = "0.1.0"
 dependencies = [
@@ -823,15 +843,18 @@ dependencies = [
 
 [[package]]
 name = "lambda-grpc-web"
-version = "0.1.1"
+version = "0.4.0"
 dependencies = [
  "axum",
+ "base64",
  "bytes",
  "http",
  "http-body",
  "http-body-util",
  "lambda_http",
  "lambda_runtime",
+ "serde",
+ "serde_json",
  "tokio",
  "tonic",
  "tonic-web",
