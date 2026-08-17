@@ -18,7 +18,6 @@ pub struct MyGreeter {}
 
 #[tonic::async_trait]
 impl Greeter for MyGreeter {
-
     type StreamHelloStream = ReceiverStream<Result<HelloReply, Status>>;
 
     async fn stream_hello(
@@ -31,7 +30,6 @@ impl Greeter for MyGreeter {
             .into_inner()
             .name
             .chars()
-            .into_iter()
             .scan(String::new(), |acc, c| {
                 acc.push(c);
                 Some(acc.clone())
@@ -82,12 +80,12 @@ mod tests {
     use tonic::codegen::tokio_stream::StreamExt;
     use tonic_web::{GrpcWebCall, GrpcWebClientLayer, GrpcWebClientService};
 
-    fn make_greeter_client() -> Result<
-        GreeterClient<
-            GrpcWebClientService<Client<HttpsConnector<HttpConnector>, GrpcWebCall<Body>>>,
-        >,
-        Box<dyn std::error::Error>,
-    > {
+    /// A greeter speaking grpc-web over https - the same stack a browser client would use.
+    type GrpcWebGreeter = GreeterClient<
+        GrpcWebClientService<Client<HttpsConnector<HttpConnector>, GrpcWebCall<Body>>>,
+    >;
+
+    fn make_greeter_client() -> Result<GrpcWebGreeter, Box<dyn std::error::Error>> {
         let connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_provider_and_platform_verifier(rustls::crypto::aws_lc_rs::default_provider())
             .expect("should configure crypto library")
@@ -118,7 +116,7 @@ mod tests {
         let response = make_greeter_client()?.stream_hello(request).await?;
 
         println!("HEADERS={headers:?}", headers = response.metadata());
-        let mut stream = response.into_inner();
+        let stream = response.into_inner();
 
         let result: Vec<String> = stream
             .map(|response| {

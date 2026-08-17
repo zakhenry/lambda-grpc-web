@@ -1,7 +1,7 @@
 use hello_world::greeter_server::{Greeter, GreeterServer};
 use hello_world::{HelloReply, HelloRequest};
-use lambda_grpc_web::lambda_runtime::Error;
 use lambda_grpc_web::LambdaServer;
+use lambda_grpc_web::lambda_runtime::Error;
 use tonic::{Request, Response, Status};
 
 pub mod hello_world {
@@ -25,7 +25,6 @@ impl Greeter for MyGreeter {
 
         Ok(Response::new(reply))
     }
-
 }
 
 // run with `cargo lambda watch -p example-hello-world`
@@ -49,19 +48,19 @@ mod tests {
     use super::*;
     use crate::hello_world::greeter_client::GreeterClient;
     use hyper_rustls::HttpsConnector;
-    use hyper_util::client::legacy::connect::HttpConnector;
     use hyper_util::client::legacy::Client;
+    use hyper_util::client::legacy::connect::HttpConnector;
     use hyper_util::rt::TokioExecutor;
     use lambda_grpc_web::lambda_runtime::tower;
     use tonic::body::Body;
     use tonic_web::{GrpcWebCall, GrpcWebClientLayer, GrpcWebClientService};
 
-    fn make_greeter_client() -> Result<
-        GreeterClient<
-            GrpcWebClientService<Client<HttpsConnector<HttpConnector>, GrpcWebCall<Body>>>,
-        >,
-        Box<dyn std::error::Error>,
-    > {
+    /// A greeter speaking grpc-web over https - the same stack a browser client would use.
+    type GrpcWebGreeter = GreeterClient<
+        GrpcWebClientService<Client<HttpsConnector<HttpConnector>, GrpcWebCall<Body>>>,
+    >;
+
+    fn make_greeter_client() -> Result<GrpcWebGreeter, Box<dyn std::error::Error>> {
         let connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_provider_and_platform_verifier(rustls::crypto::aws_lc_rs::default_provider())
             .expect("should configure crypto library")
@@ -95,5 +94,4 @@ mod tests {
 
         Ok(())
     }
-
 }

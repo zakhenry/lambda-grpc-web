@@ -1,0 +1,46 @@
+name: Version
+
+# Its own workflow rather than a job in ci.yml so that it can listen for label events: adding
+# `no-release` has to re-run this check to turn it green, and re-running the whole test matrix
+# every time someone edits a label would be wasteful.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+concurrency:
+  group: version-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bumped:
+    name: version bumped
+    # Skippable for changes that should not cut a release - add the `no-release` label to the PR.
+    if: "!contains(github.event.pull_request.labels.*.name, 'no-release')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compare the crate version against the base branch
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          version_of() { sed -n 's/^version = "\(.*\)"/\1/p' | head -1; }
+
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          base=$(git show "origin/$BASE_REF:Cargo.toml" | version_of)
+          head=$(version_of < Cargo.toml)
+          echo "$BASE_REF is $base, this branch is $head"
+
+          if [ "$base" = "$head" ]; then
+            echo "::error file=Cargo.toml::version is still $head - bump it, or add the 'no-release' label if this change should not be published"
+            exit 1
+          fi
+
+          # `sort -V` orders version strings, so the lower of the two sorting first means we moved
+          # forwards. Guards against a merge or a bad rebase walking the version backwards.
+          if [ "$(printf '%s\n%s\n' "$base" "$head" | sort -V | head -1)" != "$base" ]; then
+            echo "::error file=Cargo.toml::version went backwards, from $base to $head"
+            exit 1
+          fi
+
+          echo "version bumped from $base to $head"

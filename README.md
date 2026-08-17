@@ -251,3 +251,10 @@ this architecture will be more than fast enough.
 ## Future work
 * Support managed lambdas - should mostly just work
 * Flesh out docs as more of a tutorial style including deployment
+
+---
+
+## Contributing
+
+Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get set
+up, run the checks locally, and what a change needs to include.

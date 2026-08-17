@@ -409,6 +409,7 @@ mod tests {
     use lambda_runtime::tracing::log;
     use serde_json::{Value, json};
     use std::sync::{Mutex, Once};
+    use std::thread::{self, ThreadId};
 
     /// A grpc-web data frame carrying `HelloRequest { name: "abc" }`.
     const REQUEST_FRAME: &[u8] = &[0, 0, 0, 0, 5, 0x0a, 0x03, b'a', b'b', b'c'];
@@ -457,7 +458,10 @@ mod tests {
 
     /// Records emitted through the `log` facade the crate warns on, so tests can assert the
     /// warning actually fires rather than just that the condition holds.
-    static LOG_RECORDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    /// Records are tagged with the thread that emitted them so [`logs_since`] can hand a test only
+    /// its own output - the logger is global, and a negative assertion would otherwise trip over a
+    /// warning a test running in parallel had just emitted.
+    static LOG_RECORDS: Mutex<Vec<(ThreadId, String)>> = Mutex::new(Vec::new());
 
     struct CaptureLogger;
 
@@ -468,7 +472,10 @@ mod tests {
 
         fn log(&self, record: &log::Record) {
             if let Ok(mut records) = LOG_RECORDS.lock() {
-                records.push(format!("[{}] {}", record.level(), record.args()));
+                records.push((
+                    thread::current().id(),
+                    format!("[{}] {}", record.level(), record.args()),
+                ));
             }
         }
 
@@ -477,8 +484,8 @@ mod tests {
 
     /// Install the capture logger and return a marker for [`logs_since`].
     ///
-    /// The buffer is never cleared and the logger is global, so a test running in parallel can
-    /// append to it too - assertions match on content rather than on the exact set.
+    /// The buffer is never cleared and the logger is global, so a test running in parallel appends
+    /// to it too - [`logs_since`] filters those out by thread.
     fn start_capturing_logs() -> usize {
         static INSTALLED: Once = Once::new();
         static CAPTURE_LOGGER: CaptureLogger = CaptureLogger;
@@ -491,8 +498,15 @@ mod tests {
         LOG_RECORDS.lock().expect("log buffer should lock").len()
     }
 
+    /// The records this thread emitted since `marker`. `#[tokio::test]` drives a current-thread
+    /// runtime, so a test's own logging lands on the thread that took the marker.
     fn logs_since(marker: usize) -> Vec<String> {
-        LOG_RECORDS.lock().expect("log buffer should lock")[marker..].to_vec()
+        let this = thread::current().id();
+        LOG_RECORDS.lock().expect("log buffer should lock")[marker..]
+            .iter()
+            .filter(|(thread, _)| *thread == this)
+            .map(|(_, record)| record.clone())
+            .collect()
     }
 
     /// Serialise a response and compare as JSON, so key ordering cannot cause flakes.

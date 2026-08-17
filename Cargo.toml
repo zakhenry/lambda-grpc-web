@@ -11,7 +11,7 @@ exclude = ["examples/envoy"]
 
 [package]
 name = "lambda-grpc-web"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/zakhenry/lambda-grpc-web"
@@ -20,6 +20,16 @@ description = "grpc-web framed tonic service adaptor to aws lambda runtime"
 [lib]
 name = "lambda_grpc_web"
 path = "src/lib.rs"
+
+# docs.rs builds with default features, which select no transport and so would hit the
+# `compile_error!` in `src/lib.rs`. It cannot use `all-features` either - that enables both
+# transports and hits the *other* guard. `transport-envoy` is the choice that documents the most:
+# the public API is identical between the two apart from the `EnvoyRequest`/`EnvoyResponse`
+# envelopes this one adds.
+[package.metadata.docs.rs]
+features = ["transport-envoy", "wire-log"]
+# turns on the `doc(cfg(..))` badges that label which feature gates each item
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["catch-panic", "deadline"]

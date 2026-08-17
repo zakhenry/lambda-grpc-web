@@ -1,3 +1,7 @@
+// `docsrs` is set by the `rustdoc-args` in `[package.metadata.docs.rs]`, so the feature badges are
+// built on docs.rs (which runs nightly) and this is inert everywhere else.
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 #[cfg(feature = "deadline")]
 mod deadline_layer;
 mod lambda_server_builder;
@@ -31,9 +35,11 @@ pub use lambda_server_builder::LambdaServer;
 // the `not(..)` half matches `transport/mod.rs`, keeping a misconfigured feature set reporting the
 // `compile_error!` above rather than an unresolved import
 #[cfg(all(feature = "transport-envoy", not(feature = "transport-apigw-http")))]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-envoy")))]
 pub use transport::{EnvoyRequest, EnvoyResponse};
 
 #[cfg(feature = "wire-log")]
 mod wire_log;
 #[cfg(feature = "wire-log")]
+#[cfg_attr(docsrs, doc(cfg(feature = "wire-log")))]
 pub use wire_log::{WireLogLayer, WireLogService};

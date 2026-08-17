@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+# A newer push to the same branch makes the in-flight run redundant, except on master where the
+# publish job must not be interrupted part way through.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+      # `examples/envoy` is deliberately its own workspace, so it needs its own invocation
+      - run: cargo fmt --all --check --manifest-path examples/envoy/Cargo.toml
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # the `build.rs` in every example and in `integration` runs `tonic-prost-build`, and
+      # prost-build no longer vendors a protoc
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2
+      # `integration` resolves ORIGIN_URI through `dotenvy_macro::dotenv!`, which reads the file at
+      # *compile* time. The real one is gitignored, so without a placeholder the crate cannot even
+      # be linted. Nothing in CI dials this address - the tests that would are never run here.
+      - name: Seed a placeholder .env
+        run: echo 'ORIGIN_URI=http://localhost:9000' > .env
+
+      # the two transports are mutually exclusive (`compile_error!` in src/lib.rs), so the library
+      # has to be linted once per transport. The workspace pass covers the examples and
+      # `integration`, which all select `transport-apigw-http`.
+      - run: cargo clippy --locked --workspace --all-targets --features transport-apigw-http -- -D warnings
+      - run: cargo clippy --locked -p lambda-grpc-web --all-targets --features transport-apigw-http,wire-log -- -D warnings
+      - run: cargo clippy --locked -p lambda-grpc-web --all-targets --features transport-envoy,wire-log -- -D warnings
+      - run: cargo clippy --locked --all-targets --manifest-path examples/envoy/Cargo.toml -- -D warnings
+
+  test:
+    name: test (${{ matrix.transport }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [transport-apigw-http, transport-envoy]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Only the library. The example and `integration` tests drive a real lambda over the network
+      # (`cargo lambda watch`, or a deployed function url) and cannot pass on a runner; the clippy
+      # job is what keeps them compiling.
+      - run: cargo test --locked -p lambda-grpc-web --features ${{ matrix.transport }},wire-log
+
+  publish:
+    name: publish to crates.io
+    needs: [fmt, clippy, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      # for the OIDC handshake that trades a short-lived crates.io token, so no registry
+      # credential has to be stored as a repository secret
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Asking crates.io what exists, rather than diffing Cargo.toml against the previous commit,
+      # keeps this idempotent: re-running is a no-op, and a publish missed because of a failed run
+      # is picked up by the next push.
+      - name: Is this version already published?
+        id: check
+        env:
+          CRATE: lambda-grpc-web
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # crates.io rejects requests without a descriptive user agent
+          published=$(curl -sS --fail-with-body \
+            -H "User-Agent: ${{ github.repository }} release workflow" \
+            "https://crates.io/api/v1/crates/$CRATE" | jq -r '.versions[].num')
+
+          if grep -qxF "$version" <<< "$published"; then
+            echo "$CRATE $version is already on crates.io, nothing to do"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$CRATE $version is not published yet"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+        if: steps.check.outputs.publish == 'true'
+
+      # `cargo publish` verifies by building the packaged crate, and that build would hit the
+      # `compile_error!` guard under the default features - no transport is enabled by default on
+      # purpose. The feature only picks which transport gets compiled during verification; the
+      # published crate still exposes both for consumers to choose from.
+      - name: Publish
+        if: steps.check.outputs.publish == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked --features transport-apigw-http
