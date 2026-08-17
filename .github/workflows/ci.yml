@@ -24,8 +24,6 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all --check
-      # `examples/envoy` is deliberately its own workspace, so it needs its own invocation
-      - run: cargo fmt --all --check --manifest-path examples/envoy/Cargo.toml
 
   clippy:
     name: clippy
@@ -45,13 +43,13 @@ jobs:
       - name: Seed a placeholder .env
         run: echo 'ORIGIN_URI=http://localhost:9000' > .env
 
-      # the two transports are mutually exclusive (`compile_error!` in src/lib.rs), so the library
-      # has to be linted once per transport. The workspace pass covers the examples and
-      # `integration`, which all select `transport-apigw-http`.
-      - run: cargo clippy --locked --workspace --all-targets --features transport-apigw-http -- -D warnings
+      # The transports are additive, so one workspace pass with everything on covers the library,
+      # both examples and `integration` together.
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      # ...but a consumer enables one transport, not both, and only these passes would catch a
+      # `cfg` that has drifted out of step with the feature that gates it
       - run: cargo clippy --locked -p lambda-grpc-web --all-targets --features transport-apigw-http,wire-log -- -D warnings
       - run: cargo clippy --locked -p lambda-grpc-web --all-targets --features transport-envoy,wire-log -- -D warnings
-      - run: cargo clippy --locked --all-targets --manifest-path examples/envoy/Cargo.toml -- -D warnings
 
   test:
     name: test (${{ matrix.transport }})
@@ -59,7 +57,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transport: [transport-apigw-http, transport-envoy]
+        # each transport as a consumer would enable it, plus both at once - the combination a
+        # monorepo with a function behind each ends up resolving to
+        transport:
+          - transport-apigw-http
+          - transport-envoy
+          - transport-apigw-http,transport-envoy
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -113,10 +116,10 @@ jobs:
 
       # `cargo publish` verifies by building the packaged crate, and that build would hit the
       # `compile_error!` guard under the default features - no transport is enabled by default on
-      # purpose. The feature only picks which transport gets compiled during verification; the
-      # published crate still exposes both for consumers to choose from.
+      # purpose. The flag only affects that verification build; what is uploaded is the crate with
+      # all of its features for consumers to choose from.
       - name: Publish
         if: steps.check.outputs.publish == 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish --locked --features transport-apigw-http
+        run: cargo publish --locked --all-features

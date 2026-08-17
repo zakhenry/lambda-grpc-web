@@ -7,7 +7,7 @@
 //!
 //! The filter uses the buffered `Invoke` API, so the function must be configured with the
 //! `BUFFERED` invoke mode and a server streaming response is collected in full before it is
-//! returned.
+//! returned - see [`warn_if_buffered_stream`].
 //!
 //! [AWS Lambda http filter]: https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/aws_lambda_filter.html
 
@@ -307,14 +307,13 @@ where
 }
 
 /// Warn when a buffered response turned out to be a stream of more than one message.
+///
+/// The response is still returned as-is - a grpc-web client reads several data frames out of one
+/// body perfectly well. What it does not get is delivery *as* a stream: Envoy's filter invokes the
+/// function with the buffered `Invoke` api, so nothing reaches the client until the last message,
+/// and the whole stream has to fit within the lambda response payload limit.
 fn warn_if_buffered_stream(headers: &HeaderMap, body: &[u8]) {
-    // A `-text` body is base64 text rather than raw frames, so the frame walk below would be
-    // reading nonsense. Streaming over grpc-web-text is rare enough not to be worth the decode.
-    if is_grpc_web_text(headers) {
-        return;
-    }
-
-    let messages = count_data_messages(body);
+    let messages = count_buffered_messages(headers, body);
     if messages > 1 {
         warn!(
             "buffered {messages} grpc-web messages into a single response: Envoy's aws_lambda \
@@ -323,6 +322,53 @@ fn warn_if_buffered_stream(headers: &HeaderMap, body: &[u8]) {
              lambda response payload limit"
         );
     }
+}
+
+/// Count the grpc-web *data* messages in a buffered response body.
+fn count_buffered_messages(headers: &HeaderMap, body: &[u8]) -> usize {
+    if !is_grpc_web_text(headers) {
+        return count_data_messages(body);
+    }
+
+    match decode_grpc_web_text(body) {
+        Ok(frames) => count_data_messages(&frames),
+        // `tonic-web` produced this body, so it should always decode. Warn rather than shrug:
+        // going quiet here would mean a buffered stream slipping past unreported, which is the
+        // one thing this check exists to prevent.
+        Err(err) => {
+            warn!(
+                "could not decode a grpc-web-text response body ({err}), so it has not been \
+                 checked for buffered streaming"
+            );
+            0
+        }
+    }
+}
+
+/// Undo `tonic-web`'s base64 of a `-text` response body.
+///
+/// `tonic-web` encodes each frame *separately*, so the body is a run of independently padded
+/// base64 segments rather than one encoded blob and decoding it whole can fail. A padding run ends
+/// a segment, and a segment that needed no padding decodes correctly as part of whatever follows
+/// it, so splitting after each padding run is enough.
+fn decode_grpc_web_text(body: &[u8]) -> Result<Vec<u8>, base64::DecodeError> {
+    let mut frames = Vec::with_capacity(body.len() / 4 * 3);
+    let mut segment = 0;
+
+    for (index, byte) in body.iter().enumerate() {
+        // `==` is one run, so only the last `=` of it ends the segment
+        if *byte != b'=' || body.get(index + 1) == Some(&b'=') {
+            continue;
+        }
+        frames.extend_from_slice(&BASE64.decode(&body[segment..=index])?);
+        segment = index + 1;
+    }
+
+    if segment < body.len() {
+        frames.extend_from_slice(&BASE64.decode(&body[segment..])?);
+    }
+
+    Ok(frames)
 }
 
 fn is_grpc_web_text(headers: &HeaderMap) -> bool {
@@ -832,20 +878,96 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grpc_web_text_response_does_not_warn() {
+    async fn buffered_grpc_web_text_stream_warns_too() {
         let marker = start_capturing_logs();
 
-        // the same three message stream, but base64 text rather than raw frames - walking it as
-        // frames would read nonsense, so the count is deliberately skipped
-        let text_body = BASE64.encode(server_stream_body()).into_bytes();
+        // the same three message stream a browser client would get: base64 text, encoded frame by
+        // frame the way `tonic-web` does it
+        let mut text_body = String::new();
+        for _ in 0..3 {
+            text_body.push_str(&BASE64.encode(RESPONSE_FRAME));
+        }
+        text_body.push_str(&BASE64.encode(trailer_frame("grpc-status:0\r\n")));
 
-        envoy_json(grpc_web_response("application/grpc-web-text", text_body)).await;
+        let envelope = envoy_json(grpc_web_response(
+            "application/grpc-web-text",
+            text_body.into_bytes(),
+        ))
+        .await;
+
+        assert_eq!(envelope["status_code"], json!(200));
+        assert!(
+            logs_since(marker)
+                .iter()
+                .any(|record| record.contains("buffered 3 grpc-web messages")),
+            "a grpc-web-text stream should warn like any other, got {:?}",
+            logs_since(marker)
+        );
+    }
+
+    #[tokio::test]
+    async fn single_message_grpc_web_text_response_does_not_warn() {
+        let marker = start_capturing_logs();
+
+        let text_body = format!(
+            "{}{}",
+            BASE64.encode(RESPONSE_FRAME),
+            BASE64.encode(trailer_frame("grpc-status:0\r\n"))
+        );
+
+        envoy_json(grpc_web_response(
+            "application/grpc-web-text",
+            text_body.into_bytes(),
+        ))
+        .await;
 
         assert!(
             !logs_since(marker)
                 .iter()
                 .any(|record| record.contains("grpc-web messages")),
-            "a grpc-web-text response should not be walked as frames, got {:?}",
+            "a single message response should not warn, got {:?}",
+            logs_since(marker)
+        );
+    }
+
+    #[test]
+    fn grpc_web_text_segments_are_decoded_across_interior_padding() {
+        // `REQUEST_FRAME` is ten bytes, so each encoded segment ends in `==` and the padding lands
+        // in the middle of the body - decoding it as one blob fails, which is how a buffered
+        // stream used to slip through uncounted
+        let text_body = format!(
+            "{}{}",
+            BASE64.encode(REQUEST_FRAME),
+            BASE64.encode(REQUEST_FRAME)
+        );
+        assert!(text_body.contains("==A"), "padding should be interior");
+        assert!(
+            BASE64.decode(&text_body).is_err(),
+            "a whole-body decode should be the thing that fails"
+        );
+
+        assert_eq!(
+            decode_grpc_web_text(text_body.as_bytes()).expect("segments should decode"),
+            [REQUEST_FRAME, REQUEST_FRAME].concat()
+        );
+    }
+
+    #[test]
+    fn undecodable_grpc_web_text_warns_rather_than_going_quiet() {
+        let marker = start_capturing_logs();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/grpc-web-text"),
+        );
+
+        assert_eq!(count_buffered_messages(&headers, b"not base64 at all!"), 0);
+        assert!(
+            logs_since(marker)
+                .iter()
+                .any(|record| record.starts_with("[WARN]") && record.contains("has not been")),
+            "an uncheckable body should say so, got {:?}",
             logs_since(marker)
         );
     }

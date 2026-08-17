@@ -35,7 +35,7 @@ async fn main() -> Result<(), Error> {
 
     LambdaServer::builder()
         .add_service(GreeterServer::new(greeter))
-        .serve()
+        .serve_apigw_http()
         .await?;
 
     Ok(())

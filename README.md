@@ -19,21 +19,23 @@ protocol)
 ### 0. Pick a transport
 
 A lambda function is invoked with a JSON event whose shape is decided by whatever sits in front of
-it, so the transport is a compile time choice. There is deliberately **no default** — pick exactly
-one:
+it, so the transport has to be enabled explicitly. There is deliberately **no default**:
 
-| Feature                | Invoked by                                             | Lambda invoke mode |
-|------------------------|--------------------------------------------------------|--------------------|
-| `transport-apigw-http` | API Gateway HTTP API (v2), Lambda function URLs         | `RESPONSE_STREAM`  |
-| `transport-envoy`      | Envoy's [`aws_lambda` http filter][envoy-lambda-filter] | `BUFFERED`         |
+| Feature                | Invoked by                                             | Serve with           | Lambda invoke mode |
+|------------------------|--------------------------------------------------------|----------------------|--------------------|
+| `transport-apigw-http` | API Gateway HTTP API (v2), Lambda function URLs         | `serve_apigw_http()` | `RESPONSE_STREAM`  |
+| `transport-envoy`      | Envoy's [`aws_lambda` http filter][envoy-lambda-filter] | `serve_envoy()`      | `BUFFERED`         |
 
 ```toml
 [dependencies]
-lambda-grpc-web = { version = "0.1", features = ["transport-apigw-http"] }
+lambda-grpc-web = { version = "0.4", features = ["transport-apigw-http"] }
 ```
 
-Enabling both is a compile error. The rest of the API is identical either way — nothing below
-changes apart from the deployment notes in [step 3](#3-deploy).
+The features are **additive**: enabling both compiles both, so a workspace can have one function
+behind API Gateway and another behind Envoy without cargo's feature unification getting in the way.
+Which one a server uses is decided by the `serve_*` method it calls, and it can only call one. The
+rest of the API is identical either way — nothing below changes apart from the deployment notes in
+[step 3](#3-deploy).
 
 [envoy-lambda-filter]: https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/aws_lambda_filter.html
 
@@ -79,7 +81,7 @@ async fn main() -> Result<(), Error> { // <- note error here is `lambda_grpc_web
 
     LambdaServer::builder() // <- Different builder
         .add_service(GreeterServer::new(greeter))
-        .serve() // <- no socket declared
+        .serve_apigw_http() // <- no socket declared, just the transport picked in step 0
         .await?;
 
     Ok(())
@@ -198,14 +200,13 @@ service under `tonic_web::GrpcWebClientLayer` and the generated Tonic client wor
 real `Status` errors and metadata.
 
 A worked example — service, `envoy.yaml`, and a test doing exactly that against the
-`cargo lambda watch` emulator — is in [`examples/envoy`](examples/envoy). It is deliberately its
-own workspace, because cargo unifies features across the members it builds together and the other
-examples select `transport-apigw-http`:
+`cargo lambda watch` emulator — is in [`examples/envoy`](examples/envoy). It sits in the same
+workspace as the API Gateway examples, which is the arrangement the additive transport features
+exist to allow:
 
 ```shell
-cd examples/envoy
-cargo lambda watch                                              # terminal 1
-cargo lambda invoke example-envoy --data-file events/say_hello.json  # terminal 2
+cargo lambda watch -p example-envoy                                                 # terminal 1
+cargo lambda invoke example-envoy --data-file examples/envoy/events/say_hello.json  # terminal 2
 ```
 
 ##### Limitations
@@ -232,7 +233,8 @@ cargo lambda invoke example-envoy --data-file events/say_hello.json  # terminal 
 ¹ Under `transport-envoy` the whole stream is collected before anything is returned, so it is
 bounded by the lambda **response payload size limit** as well as the timeout, and messages are not
 delivered incrementally. A warning is logged when a buffered response turns out to contain more
-than one message.
+than one message — including for `application/grpc-web-text`, the variant a browser client asks
+for, where the count means decoding `tonic-web`'s per frame base64 first.
 
 ---
 

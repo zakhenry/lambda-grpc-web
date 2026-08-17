@@ -1,8 +1,8 @@
 //! The `transport-envoy` counterpart to the `example-hello-world` crate.
 //!
 //! The service itself is ordinary Tonic and identical to the API Gateway example - the only
-//! difference is the transport feature in `Cargo.toml`, and how you poke at it locally (see the
-//! tests at the bottom of this file).
+//! differences are the transport feature in `Cargo.toml`, the `serve_envoy` call below in place of
+//! `serve_apigw_http`, and how you poke at it locally (see the tests at the bottom of this file).
 
 use hello_world::greeter_server::{Greeter, GreeterServer};
 use hello_world::{HelloReply, HelloRequest};
@@ -33,10 +33,9 @@ impl Greeter for MyGreeter {
     }
 }
 
-// run with `cargo lambda watch` from this directory (`examples/envoy`) - it is its own workspace,
-// so `-p example-envoy` from the repo root will not find it
-// invoke with `cargo lambda invoke example-envoy --data-file events/say_hello.json`
-// build for aws with `cargo lambda build --release --output-format zip --arm64`
+// run with `cargo lambda watch -p example-envoy`
+// invoke with `cargo lambda invoke example-envoy --data-file examples/envoy/events/say_hello.json`
+// build for aws with `cargo lambda build -p example-envoy --release --output-format zip --arm64`
 //
 // when deploying, configure the function's invoke mode as `BUFFERED` - Envoy's filter calls the
 // buffered `Invoke` api and cannot consume a streamed response.
@@ -46,13 +45,13 @@ async fn main() -> Result<(), Error> {
 
     LambdaServer::builder()
         .add_service(GreeterServer::new(greeter))
-        .serve()
+        .serve_envoy()
         .await?;
 
     Ok(())
 }
 
-// integration, run `cargo lambda watch` in this directory first to have the local lambda running.
+// integration, run `cargo lambda watch -p example-envoy` first to have the local lambda running.
 //
 // The generated Tonic client is used exactly as in the API Gateway example, with one difference in
 // the stack underneath it: Envoy invokes the function with a JSON envelope rather than proxying

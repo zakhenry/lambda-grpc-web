@@ -159,7 +159,7 @@ async fn main() -> Result<(), Error> {
             AuthInterceptor,
         ))
         .add_service(HealthServer::new(HealthTestService))
-        .serve()
+        .serve_apigw_http()
         .await?;
 
     Ok(())

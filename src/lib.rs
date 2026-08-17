@@ -7,19 +7,13 @@ mod deadline_layer;
 mod lambda_server_builder;
 mod transport;
 
-#[cfg(all(feature = "transport-apigw-http", feature = "transport-envoy"))]
-compile_error!(
-    "the `transport-apigw-http` and `transport-envoy` features are mutually exclusive - exactly \
-     one transport is compiled in. Pick the one matching what invokes the function and remove the \
-     other, e.g. \
-     `lambda-grpc-web = { version = \"...\", features = [\"transport-envoy\"] }`. Note that \
-     features are additive across a dependency graph, so another crate in the workspace may be \
-     enabling the one you did not ask for."
-);
-
+// The transport features are additive - enabling both is supported and compiles both, so that a
+// workspace can hold one function behind API Gateway and another behind Envoy. Which one a server
+// uses is picked by calling `serve_apigw_http` or `serve_envoy`, not by the feature set. At least
+// one has to be on, though: with none there is no way to run anything.
 #[cfg(not(any(feature = "transport-apigw-http", feature = "transport-envoy")))]
 compile_error!(
-    "no transport feature is enabled - enable exactly one of `transport-apigw-http` (for API \
+    "no transport feature is enabled - enable at least one of `transport-apigw-http` (for API \
      Gateway HTTP APIs and Lambda function URLs, invoke mode `RESPONSE_STREAM`) or \
      `transport-envoy` (for Envoy's `aws_lambda` http filter, invoke mode `BUFFERED`). There is \
      deliberately no default: the two receive different event envelopes, so the choice has to \
@@ -28,13 +22,11 @@ compile_error!(
 );
 
 pub use lambda_runtime;
-pub use lambda_server_builder::LambdaServer;
+pub use lambda_server_builder::{GrpcService, LambdaRouter, LambdaServer};
 
 /// The Envoy event envelopes, so that a function can be exercised in tests without an Envoy in
 /// front of it. See [`EnvoyRequest::new`].
-// the `not(..)` half matches `transport/mod.rs`, keeping a misconfigured feature set reporting the
-// `compile_error!` above rather than an unresolved import
-#[cfg(all(feature = "transport-envoy", not(feature = "transport-apigw-http")))]
+#[cfg(feature = "transport-envoy")]
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-envoy")))]
 pub use transport::{EnvoyRequest, EnvoyResponse};
 

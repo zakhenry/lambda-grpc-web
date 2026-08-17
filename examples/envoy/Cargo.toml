@@ -1,8 +1,3 @@
-# Deliberately its own workspace rather than a member of the root one: cargo unifies features
-# across the members it builds together, and this crate asks for `transport-envoy` while the other
-# examples ask for `transport-apigw-http`. See the `exclude` note in the root `Cargo.toml`.
-[workspace]
-
 [package]
 name = "example-envoy"
 version = "0.1.0"
@@ -31,9 +26,3 @@ tonic-web = "=0.14.2"
 
 [build-dependencies]
 tonic-prost-build = "=0.14.2"
-
-# mirrors the root workspace - this crate is its own workspace root, so it needs its own copy.
-# revert when https://github.com/hyperium/tonic/pull/2474 is merged
-[patch.crates-io]
-tonic-web = { git = "https://github.com/zakhenry/tonic", rev = "c3d84d77db4803ef54948aab4fe97c67150329ce" }
-tonic = { git = "https://github.com/zakhenry/tonic", rev = "c3d84d77db4803ef54948aab4fe97c67150329ce" }

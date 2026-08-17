@@ -17,7 +17,7 @@ runs, and what a change has to include to get merged.
 
 ## Layout
 
-There are **two** cargo workspaces:
+One cargo workspace:
 
 | Path                        | What it is                                                              |
 |-----------------------------|-------------------------------------------------------------------------|
@@ -25,45 +25,46 @@ There are **two** cargo workspaces:
 | `integration/`              | A service plus tests that drive it over the wire                        |
 | `examples/hello-world/`     | Minimal unary example                                                   |
 | `examples/server-streaming/`| Server streaming example                                                |
-| `examples/envoy/`           | Envoy example — **its own workspace**                                   |
-
-`examples/envoy` is excluded from the root workspace on purpose. Cargo unifies features across the
-members it builds together, and that example selects `transport-envoy` while everything else
-selects `transport-apigw-http` — as one workspace, both transports would end up enabled at once and
-trip the `compile_error!` guard. The practical consequence is that **every command has to be run
-twice**, once per workspace.
+| `examples/envoy/`           | Envoy example — selects `transport-envoy`, everything else selects `transport-apigw-http` |
 
 ## Working with the transport features
 
-The library will not compile without exactly one transport feature, and will not compile with both
-(see the `compile_error!` calls in `src/lib.rs`). So:
+The transport features are **additive**. Cargo unifies features across the members it builds
+together, so a workspace pass compiles the library with both transports enabled — that is
+supported, and is also the situation a consumer with one function behind API Gateway and another
+behind Envoy ends up in. The transport a given server uses is chosen by which method it calls,
+`serve_apigw_http` or `serve_envoy`, not by the feature set.
 
-* `cargo check -p lambda-grpc-web` on its own **fails** — that is the guard working, not a broken
-  checkout. Pass `--features transport-apigw-http` or `--features transport-envoy`.
-* `--all-features` **never** works on this crate. Anything that needs full coverage runs once per
-  transport instead.
+The one rejected configuration is *no* transport, which is what `cargo check -p lambda-grpc-web` on
+its own hits (see the `compile_error!` in `src/lib.rs`). That is the guard working, not a broken
+checkout — pass `--features transport-apigw-http`, `--features transport-envoy`, or
+`--all-features`.
+
+Adding a transport means a module under `src/transport/` with a `run` of its own, gated on its own
+feature, plus a matching `serve_*` on `LambdaRouter`. Nothing else in the crate should have to know
+which one is in play.
 
 ## Running the checks
 
 These are exactly what CI runs, in the same order. All of them must pass.
 
 ```shell
-# formatting, both workspaces
+# formatting
 cargo fmt --all --check
-cargo fmt --all --check --manifest-path examples/envoy/Cargo.toml
 
-# clippy, once per transport for the library, plus the other crates
-cargo clippy --locked --workspace --all-targets --features transport-apigw-http -- -D warnings
+# clippy - one workspace pass with everything on, then once per transport for the library, which
+# is what catches a `cfg` that has drifted out of step with the feature gating it
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo clippy --locked -p lambda-grpc-web --all-targets --features transport-apigw-http,wire-log -- -D warnings
 cargo clippy --locked -p lambda-grpc-web --all-targets --features transport-envoy,wire-log -- -D warnings
-cargo clippy --locked --all-targets --manifest-path examples/envoy/Cargo.toml -- -D warnings
 
-# unit tests, once per transport
+# unit tests, per transport and with both on
 cargo test --locked -p lambda-grpc-web --features transport-apigw-http,wire-log
 cargo test --locked -p lambda-grpc-web --features transport-envoy,wire-log
+cargo test --locked -p lambda-grpc-web --all-features
 ```
 
-`cargo fmt --all` (in both workspaces) fixes most formatting complaints.
+`cargo fmt --all` fixes most formatting complaints.
 
 ## Tests
 
@@ -100,9 +101,8 @@ placeholder so the crate can be linted; nothing there ever connects to it.
 The envoy example is invoked rather than served, so it works a little differently:
 
 ```shell
-cd examples/envoy
-cargo lambda watch                                                    # terminal 1
-cargo lambda invoke example-envoy --data-file events/say_hello.json   # terminal 2
+cargo lambda watch -p example-envoy                                                     # terminal 1
+cargo lambda invoke example-envoy --data-file examples/envoy/events/say_hello.json      # terminal 2
 ```
 
 ## Making a change
@@ -123,14 +123,13 @@ the PR and the check goes green. The label is picked up as soon as you add it; n
 again.
 
 > [!IMPORTANT]
-> Bumping the version leaves **both** lockfiles stale, because each records the version of
-> `lambda-grpc-web` itself. CI builds with `--locked` and will fail until they are refreshed and
+> Bumping the version leaves the lockfile stale, because it records the version of
+> `lambda-grpc-web` itself. CI builds with `--locked` and will fail until it is refreshed and
 > committed:
 >
 > ```shell
-> cargo check --features transport-apigw-http
-> cargo check --manifest-path examples/envoy/Cargo.toml
-> git add Cargo.lock examples/envoy/Cargo.lock
+> cargo check --all-features
+> git add Cargo.lock
 > ```
 
 ## Releasing
@@ -143,27 +142,23 @@ is picked up by the next push.
 
 Two things about that job are load bearing if you ever need to change it:
 
-* It publishes with `--features transport-apigw-http`. `cargo publish` verifies by building the
-  packaged crate, and that build would hit the "no transport" guard under the default features. The
-  flag only picks which transport gets compiled during verification — the published crate still
-  offers both.
+* It publishes with `--all-features`. `cargo publish` verifies by building the packaged crate, and
+  that build would hit the "no transport" guard under the default features. The flag only affects
+  the verification build — what is uploaded is the crate with all of its features.
 * It authenticates over OIDC ([trusted publishing][trusted-publishing]), so there is no crates.io
   token stored in repository secrets. This has to be registered once on the crates.io side, against
   this repository and the `CI` workflow.
 
-docs.rs has the same "no transport" problem and is handled by `[package.metadata.docs.rs]` in
-`Cargo.toml`, which pins the docs build to `transport-envoy` — the two transports expose the same
-API apart from the `EnvoyRequest`/`EnvoyResponse` envelopes, so that setting documents the superset.
-docs.rs only rebuilds on publish, so a fix there takes effect on the next release.
+docs.rs has the same "no transport" problem and is handled by `all-features = true` under
+`[package.metadata.docs.rs]` in `Cargo.toml`. docs.rs only rebuilds on publish, so a fix there takes
+effect on the next release.
 
 [trusted-publishing]: https://github.com/rust-lang/crates-io-auth-action
 
 ## A note on the tonic patch
 
-The root `Cargo.toml` and `examples/envoy/Cargo.toml` both carry a `[patch.crates-io]` pointing
-`tonic` and `tonic-web` at a fork, pending [hyperium/tonic#2474][tonic-pr]. Patches apply to local
-builds only — they are ignored for a crate consumed from crates.io — so published releases resolve
-against upstream. If you touch it, keep the two copies in step; the example needs its own because it
-is a separate workspace root.
+The root `Cargo.toml` carries a `[patch.crates-io]` pointing `tonic` and `tonic-web` at a fork,
+pending [hyperium/tonic#2474][tonic-pr]. Patches apply to local builds only — they are ignored for a
+crate consumed from crates.io — so published releases resolve against upstream.
 
 [tonic-pr]: https://github.com/hyperium/tonic/pull/2474

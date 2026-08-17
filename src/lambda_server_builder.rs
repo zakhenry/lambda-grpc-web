@@ -21,6 +21,28 @@ use tower_http::catch_panic::CatchPanicLayer;
 type GrpcRequest = Request<Body>;
 type GrpcResponse = Response<Body>;
 
+/// The shape a transport needs to drive: a cloneable grpc-web service that cannot fail.
+///
+/// Both an assembled [`LambdaRouter`] stack and the layered service inside it satisfy this, so it
+/// spells the bound once rather than repeating it on every `serve_*` method. It is implemented for
+/// every service that fits and cannot be implemented by hand - it exists to be named in a
+/// `where` clause, not to be written.
+pub trait GrpcService:
+    Service<GrpcRequest, Response = GrpcResponse, Error = Infallible, Future: Send + 'static>
+    + Clone
+    + Send
+    + 'static
+{
+}
+
+impl<S> GrpcService for S where
+    S: Service<GrpcRequest, Response = GrpcResponse, Error = Infallible, Future: Send + 'static>
+        + Clone
+        + Send
+        + 'static
+{
+}
+
 #[derive(Clone)]
 pub struct LambdaServer<L = Identity> {
     service_builder: ServiceBuilder<L>,
@@ -81,17 +103,43 @@ impl<L> LambdaRouter<L> {
         self
     }
 
-    pub async fn serve(self) -> Result<(), Error>
+    /// Drive the service with the API Gateway HTTP API (v2) event envelope, which is also what a
+    /// Lambda function URL sends.
+    ///
+    /// The response is streamed, so the function has to be configured with the `RESPONSE_STREAM`
+    /// invoke mode.
+    #[cfg(feature = "transport-apigw-http")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "transport-apigw-http")))]
+    pub async fn serve_apigw_http(self) -> Result<(), Error>
     where
         L: Layer<Routes>,
-        L::Service: Service<
-                GrpcRequest,
-                Response = GrpcResponse,
-                Error = Infallible,
-                Future: Send + 'static,
-            > + Clone
-            + Send
-            + 'static,
+        L::Service: GrpcService,
+    {
+        crate::transport::apigw_http::run(self.into_service()).await
+    }
+
+    /// Drive the service with [Envoy's `aws_lambda` http filter][envoy-lambda-filter] envelope.
+    ///
+    /// The filter calls the buffered `Invoke` api, so the function has to be configured with the
+    /// `BUFFERED` invoke mode and a server streaming response cannot be delivered incrementally.
+    ///
+    /// [envoy-lambda-filter]: https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/aws_lambda_filter.html
+    #[cfg(feature = "transport-envoy")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "transport-envoy")))]
+    pub async fn serve_envoy(self) -> Result<(), Error>
+    where
+        L: Layer<Routes>,
+        L::Service: GrpcService,
+    {
+        crate::transport::envoy::run(self.into_service()).await
+    }
+
+    /// The grpc-web stack, assembled but not yet driven by a transport. Every `serve_*` method
+    /// builds exactly this - the transport is only ever the last step.
+    fn into_service(self) -> impl GrpcService
+    where
+        L: Layer<Routes>,
+        L::Service: GrpcService,
     {
         let service_builder = ServiceBuilder::new();
 
@@ -119,8 +167,6 @@ impl<L> LambdaRouter<L> {
         let service_builder =
             service_builder.layer(LambdaDeadlineLayer::new(Duration::from_millis(500)));
 
-        let svc = service_builder.service(self.service_builder.service(self.routes));
-
-        crate::transport::run(svc).await
+        service_builder.service(self.service_builder.service(self.routes))
     }
 }

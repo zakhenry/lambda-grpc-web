@@ -1,17 +1,12 @@
 [workspace]
 members = [
     ".",
-    "examples/hello-world", "examples/server-streaming", "integration",
+    "examples/hello-world", "examples/server-streaming", "examples/envoy", "integration",
 ]
-# `examples/envoy` selects `transport-envoy` while every other member selects
-# `transport-apigw-http`. Cargo unifies features across the members it builds together, so keeping
-# it here would enable both transports at once and trip the `compile_error!` guard in `src/lib.rs`.
-# It is its own workspace instead - build and run it from inside its directory.
-exclude = ["examples/envoy"]
 
 [package]
 name = "lambda-grpc-web"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/zakhenry/lambda-grpc-web"
@@ -22,12 +17,9 @@ name = "lambda_grpc_web"
 path = "src/lib.rs"
 
 # docs.rs builds with default features, which select no transport and so would hit the
-# `compile_error!` in `src/lib.rs`. It cannot use `all-features` either - that enables both
-# transports and hits the *other* guard. `transport-envoy` is the choice that documents the most:
-# the public API is identical between the two apart from the `EnvoyRequest`/`EnvoyResponse`
-# envelopes this one adds.
+# `compile_error!` in `src/lib.rs`. The features are additive, so everything can simply be on.
 [package.metadata.docs.rs]
-features = ["transport-envoy", "wire-log"]
+all-features = true
 # turns on the `doc(cfg(..))` badges that label which feature gates each item
 rustdoc-args = ["--cfg", "docsrs"]
 
@@ -37,9 +29,11 @@ catch-panic = []
 deadline = []
 wire-log = ["dep:http-body", "dep:http-body-util", "dep:bytes"]
 
-# Transports are mutually exclusive and there is deliberately no default - which envelope a lambda
-# receives is a deployment decision, so it has to be made explicitly. See the `compile_error!`
-# guards in `src/lib.rs`.
+# Transports are additive, and there is deliberately no default - which envelope a lambda receives
+# is a deployment decision, so it has to be made explicitly. Enabling both is supported (a
+# workspace may well have a function behind each); the one a given server uses is picked by calling
+# `serve_apigw_http` or `serve_envoy`. See the `compile_error!` in `src/lib.rs` for the one
+# combination that is rejected: none at all.
 # API Gateway HTTP API (v2) event payload, streamed with the `RESPONSE_STREAM` invoke mode.
 transport-apigw-http = ["dep:lambda_http", "dep:http-body", "dep:bytes"]
 # Envoy `aws_lambda` http filter envelope, buffered with the `BUFFERED` invoke mode.

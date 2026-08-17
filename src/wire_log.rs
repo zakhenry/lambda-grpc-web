@@ -8,9 +8,9 @@
 use bytes::Bytes;
 use http::{Request, Response};
 use http_body::{Body as HttpBody, Frame};
-use http_body_util::BodyExt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tonic::body::Body;
 use tower::Layer;
 use tower::Service;
 
@@ -96,7 +96,10 @@ where
     ResBody: HttpBody<Data = Bytes> + Send + 'static,
     ResBody::Error: std::error::Error + Send + Sync + 'static,
 {
-    type Response = Response<http_body_util::combinators::UnsyncBoxBody<Bytes, ResBody::Error>>;
+    // The logged body is erased into tonic's `Body` rather than a box of its own, so that adding
+    // this layer does not change the type of the response coming out of the stack. That is what
+    // lets `LambdaServer` assemble one stack for either transport regardless of this feature.
+    type Response = Response<Body>;
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -118,9 +121,8 @@ where
                 inner: body,
                 frame_count: 0,
             };
-            let boxed_body = logged_body.boxed_unsync();
 
-            Ok(Response::from_parts(parts, boxed_body))
+            Ok(Response::from_parts(parts, Body::new(logged_body)))
         })
     }
 }

@@ -2,19 +2,20 @@
 //!
 //! A lambda function is invoked with a JSON event whose shape is decided by whatever is in front
 //! of it, and the grpc-web request/response has to be dug out of (and packed back into) that
-//! envelope. Exactly one transport is compiled in, selected by feature flag, so the rest of the
-//! crate can talk plain `http::Request` / `http::Response` without caring which one it is.
+//! envelope. Each transport is a module with a `run` of its own, and the rest of the crate talks
+//! plain `http::Request` / `http::Response` without caring which one drives it.
+//!
+//! The features are additive on purpose: enabling both compiles both, which is what lets one
+//! workspace hold a function behind API Gateway and another behind Envoy. Which one a given
+//! function uses is decided at the call site by the matching [`LambdaRouter`] method
+//! (`serve_apigw_http` / `serve_envoy`), so a server can still only ever be driven by one.
+//!
+//! [`LambdaRouter`]: crate::LambdaRouter
 
-// The `not(..)` halves keep a misconfigured feature set reporting only the `compile_error!` in
-// `lib.rs`, rather than burying it under a duplicate definition of `run`.
-#[cfg(all(feature = "transport-apigw-http", not(feature = "transport-envoy")))]
-mod apigw_http;
-#[cfg(all(feature = "transport-apigw-http", not(feature = "transport-envoy")))]
-pub(crate) use apigw_http::run;
+#[cfg(feature = "transport-apigw-http")]
+pub(crate) mod apigw_http;
 
-#[cfg(all(feature = "transport-envoy", not(feature = "transport-apigw-http")))]
-mod envoy;
-#[cfg(all(feature = "transport-envoy", not(feature = "transport-apigw-http")))]
-pub(crate) use envoy::run;
-#[cfg(all(feature = "transport-envoy", not(feature = "transport-apigw-http")))]
+#[cfg(feature = "transport-envoy")]
+pub(crate) mod envoy;
+#[cfg(feature = "transport-envoy")]
 pub use envoy::{EnvoyRequest, EnvoyResponse};
